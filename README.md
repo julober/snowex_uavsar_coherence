@@ -21,4 +21,4 @@ I activate to install needed packages and versions.
 I plan to have clones of this package on CURC and maybe the BSU supercomputer, but will have to 
 build and environment in each of those spaces. On the supercomputers, I probably want to use the 
 `-p ./env` flag to install the environment into the local directory, where there is probably more
-space than on my home directory. [https://www.reddit.com/r/Python/comments/wpcfad/best_practices_for_conda_virtual_environments/]<Reddit thread>
+space than on my home directory. [Reddit thread]<https://www.reddit.com/r/Python/comments/wpcfad/best_practices_for_conda_virtual_environments/>
