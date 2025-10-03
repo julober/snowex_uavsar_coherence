@@ -1,4 +1,6 @@
-
+import math 
+import rioxarray as rxa
+import matplotlib.pyplot as plt
 
 def plot_tifs_grid(tif_inputs, is_file=True):
     """
