@@ -2,7 +2,9 @@ import math
 import rioxarray as rxa
 import matplotlib.pyplot as plt
 
-def plot_tifs_grid(tif_inputs, is_file=True):
+def plot_tifs_grid(tif_inputs, 
+                   is_file=True,
+                   titles=None):
     """
     Plots a list of .tif files or arrays in a grid (3 columns), with a shared colorbar.
 
@@ -14,10 +16,12 @@ def plot_tifs_grid(tif_inputs, is_file=True):
     # Load data arrays if file paths are provided
     if is_file:
         arrays = [rxa.open_rasterio(fp)[0].values for fp in tif_inputs]
-        titles = [f"Image pair {i+1}" for i in range(len(tif_inputs))]  # use file name as title
+        if (titles == None) : 
+            titles = [f"Image pair {i+1}" for i in range(len(tif_inputs))]  # use file name as title
     else:
         arrays = tif_inputs
-        titles = [f"Image pair {i+1}" for i in range(len(arrays))]
+        if (titles == None) : 
+            titles = [f"Image pair {i+1}" for i in range(len(arrays))]
 
     n_images = len(arrays)
     n_cols = 3

@@ -28,3 +28,4 @@ def calc_coherence_unweighted(img1, img2, window=13) :
     # Coherence magnitude
     coherence = np.abs(numerator / denom)
     return coherence
+
