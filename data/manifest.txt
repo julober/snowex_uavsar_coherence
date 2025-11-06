@@ -1,5 +1,3 @@
-data/.DS_Store
-data/data/.DS_Store
 data/manifest.txt
 data/README.md
 data/snowex_grmesa/grmesa_27416_20003-028_20005-007_0011d_s01_L090_01_int_grd/grmesa_27416_20003-028_20005-007_0011d_s01_L090_01_int_grd.csv
@@ -230,7 +228,6 @@ data/snowex_grmesa/grmesa_27416_21019-017_21021-005_0006d_s01_L090_01_int_grd/gr
 data/snowex_grmesa/grmesa_27416_21019-017_21021-005_0006d_s01_L090_01_int_grd/grmesa_27416_21019-017_21021-005_0006d_s01_L090VV_01.hgt.grd.tiff
 data/snowex_grmesa/grmesa_27416_21019-017_21021-005_0006d_s01_L090_01_int_grd/grmesa_27416_21019-017_21021-005_0006d_s01_L090VV_01.int.grd.tiff
 data/snowex_grmesa/grmesa_27416_21019-017_21021-005_0006d_s01_L090_01_int_grd/grmesa_27416_21019-017_21021-005_0006d_s01_L090VV_01.unw.grd.tiff
-data/snowex_lowman/.DS_Store
 data/snowex_lowman/coherences/lowman_05208_coherences.stack
 data/snowex_lowman/coherences/lowman_23205_coherences.stack
 data/snowex_lowman/jpl_interferograms/lowman_05208_21015-009_21017-019_0007d_s01_L090_01_int_grd/lowman_05208_21015-009_21017-019_0007d_s01_L090_01_int_grd.csv
@@ -325,7 +322,6 @@ data/snowex_lowman/slcs_geocoded/lowman_23205_21019_018_210316_L090VV_01_BC_s2_2
 data/snowex_lowman/slcs_geocoded/lowman_23205_21019_018_210316_L090VV_01_BC_s2_2x8.slc.real.tif
 data/snowex_lowman/slcs_geocoded/lowman_23205_21021_006_210322_L090VV_01_BC_s2_2x8.slc.imag.tif
 data/snowex_lowman/slcs_geocoded/lowman_23205_21021_006_210322_L090VV_01_BC_s2_2x8.slc.real.tif
-data/snowex_lowman/slcs_raw/.DS_Store
 data/snowex_lowman/slcs_raw/lowman_05208_01_BU_s2_2x8.lkv
 data/snowex_lowman/slcs_raw/lowman_05208_01_BU_s2_2x8.llh
 data/snowex_lowman/slcs_raw/lowman_05208_01_BU.dop
@@ -382,7 +378,6 @@ data/snowex_lowman/snex_qsi_lidar/SNEX20_QSI_DEM_0.5M_USIDBS_20210917_20210917.t
 data/snowex_lowman/snex_qsi_lidar/SNEX20_QSI_DEM_0.5M_USIDDC_20210916_20210916.tif
 data/snowex_lowman/snex_qsi_lidar/SNEX20_QSI_DEM_0.5M_USIDMC_20210917_20210917.tif
 data/snowex_lowman/snex_qsi_lidar/SNEX20_QSI_DEM_0.5M_USIDMC_20210917_20210917.tif.aux.xml
-data/snowex_lowman/snotel/.DS_Store
 data/snowex_lowman/snotel/Jackson_550_STAND_WATERYEAR=2020.csv
 data/snowex_lowman/snotel/Jackson_550_STAND_WATERYEAR=2021.csv
 data/snowex_lowman/snotel/Mores_637_STAND_WATERYEAR=2020.csv
