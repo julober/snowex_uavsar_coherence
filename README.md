@@ -1,5 +1,5 @@
 
-## Final project for GEOG6655
+## Snowex UAVSAR coherence 
 
 This is package structured for my research project for my master's degree. 
 
