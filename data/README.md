@@ -1,3 +1,3 @@
-Put here clean, tidy data in R format (e.g. saved with `save` or `saveRDS` in R) or other formats (e.g. txt, csv).
+I keep data in local copies of repositories only due to size. 
 
-Write documentation for these data following the template in `R/dataset.R` (see http://r-pkgs.had.co.nz/data.html#documenting-data). 
+If you want to download the data, there are scripts in scripts/download/ data. A manifest.txt file located in this directory keeps an updated list of the data files that I have on my local folder. 
