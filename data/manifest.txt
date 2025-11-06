@@ -1,5 +1,3 @@
-data/manifest.txt
-data/README.md
 data/snowex_grmesa/grmesa_27416_20003-028_20005-007_0011d_s01_L090_01_int_grd/grmesa_27416_20003-028_20005-007_0011d_s01_L090_01_int_grd.csv
 data/snowex_grmesa/grmesa_27416_20003-028_20005-007_0011d_s01_L090_01_int_grd/grmesa_27416_20003-028_20005-007_0011d_s01_L090HH_01.cor.grd.tiff
 data/snowex_grmesa/grmesa_27416_20003-028_20005-007_0011d_s01_L090_01_int_grd/grmesa_27416_20003-028_20005-007_0011d_s01_L090HH_01.hgt.grd.tiff

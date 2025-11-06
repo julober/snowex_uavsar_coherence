@@ -1,5 +1,7 @@
 .DS_Store
 **/.DS_Store
+__pycache__/
+**/__pycache__/
 data/snowex_grmesa/
 data/snowex_lowman/
 data/test_data_zach/
