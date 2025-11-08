@@ -1,7 +1,15 @@
+# mac os stuff
 .DS_Store
 **/.DS_Store
+
+# python caching
 __pycache__/
 **/__pycache__/
+
+# ignore data files
 data/snowex_grmesa/
 data/snowex_lowman/
 data/test_data_zach/
+
+# ignore QGIS stuff 
+qgis_files/

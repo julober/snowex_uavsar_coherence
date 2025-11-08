@@ -1,4 +1,5 @@
 import numpy as np 
+import xarray as xr
 from scipy.signal import convolve2d 
 
 # Calculate the coherence magnitude over 13x13 pixels 
@@ -9,8 +10,13 @@ def calc_coherence_unweighted(img1, img2, window=13) :
     kernel = np.ones((window, window), dtype=np.float32)
     kernel /= kernel.sum()
 
+    if (type(img1) != xr.DataArray) or (type(img2) != xr.DataArray):
+        print("Input is not Xarray")
+
     # Numerator: E[u1 * conj(u2)] a.k.a. the cross product of the two complex numbers
     cross_prod = img1 * np.conj(img2)
+
+    print(type(cross_prod))
 
     # convolve2d does the leg work of moving the window over all pixels. 
     # the 'symm' boundary creates a mirror reflection to fill in areas for pixels at the edges
