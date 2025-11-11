@@ -1,6 +1,7 @@
 import numpy as np 
 import xarray as xr
 from scipy.signal import convolve2d 
+import math
 
 # Calculate the coherence magnitude over 13x13 pixels 
 # img1 and img2 should be the same size
@@ -35,3 +36,37 @@ def calc_coherence_unweighted(img1, img2, window=13) :
     coherence = np.abs(numerator / denom)
     return coherence
 
+def calc_coherence_matrix(coherences,
+                          num_scenes,
+                          method = 'mean', 
+                          threshold = 0.3) : 
+    """
+    Calculates a coherence matrix from a list of coherence arrays.
+
+    Parameters: 
+    - coherences: list of 2D numpy arrays representing coherence of interferograms
+    - method: 'mean' to use mean coherence, 'prop' to use proportion above threshold. default is 'mean'
+    - threshold: threshold value for 'prop' method (optional). default is 0.3
+    """
+
+    if (method not in ['mean', 'prop']) :
+        raise ValueError("Method must be 'mean' or 'prop'")
+    if (math.comb(num_scenes, 2) != len(coherences)) :
+        raise ValueError("Number of coherence arrays does not match number of scenes")
+
+    mtx = np.zeros([num_scenes, num_scenes])
+    counter = 0
+    for i in range(num_scenes) : 
+        for j in range(i, num_scenes) : 
+            if (i == j) : 
+                mtx[i, j] = 1
+                continue
+            if (method == 'mean') :
+                mtx[i, j] = np.mean(coherences[counter])
+            elif (method == 'prop') :
+                mtx[i, j] = np.sum(np.where(coherences[counter] > threshold, 1, 0)) \
+                                   / coherences[counter].size
+            counter += 1
+
+    # set non-needed values to nan
+    return np.where(mtx == 0, np.nan, mtx)

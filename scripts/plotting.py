@@ -1,10 +1,11 @@
 import math 
 import rioxarray as rxa
 import matplotlib.pyplot as plt
+import pandas as pd
 
 def plot_tifs_grid(tif_inputs, 
                    is_file=True,
-                   titles=None):
+                   titles=None) :
     """
     Plots a list of .tif files or arrays in a grid (3 columns), with a shared colorbar.
 
@@ -50,4 +51,32 @@ def plot_tifs_grid(tif_inputs,
     cbar = fig.colorbar(imgs[0], ax=axes[:n_images], orientation='vertical', fraction=0.02, pad=0.02)
     cbar.set_label('Coherence', fontsize=12)
 
+    plt.show()
+
+def plot_coherence_matrix(coh_matrix, dates):
+    """
+    Plots a coherence matrix with dates as labels.
+
+    Parameters:
+    - coh_matrix: 2D numpy array representing the coherence matrix
+    - dates: list of date strings corresponding to the coherence matrix axes
+    """
+    fig, ax = plt.subplots(figsize=(10, 8))
+    cax = ax.matshow(coh_matrix, cmap='viridis', vmin=0, vmax=1)
+
+    dates_dt = pd.to_datetime(dates)
+
+    # Set ticks and labels
+    ax.set_xticks(range(len(dates)))
+    ax.set_yticks(range(len(dates)))
+    ax.set_xticklabels([d.strftime('%y/%m/%d') for d in dates_dt], rotation=90)
+    ax.set_yticklabels([d.strftime('%y/%m/%d') for d in dates_dt])
+
+    # Add colorbar
+    cbar = fig.colorbar(cax)
+    cbar.set_label('Coherence', fontsize=12)
+
+    plt.title('Coherence Matrix', fontsize=16)
+    plt.xlabel('Dates', fontsize=14)
+    plt.ylabel('Dates', fontsize=14)
     plt.show()
