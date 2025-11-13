@@ -347,7 +347,16 @@ data/snowex_lowman/slcs_geocoded/lowman_23205_21021_006_210322_L090VV_01_BC_s2_2
 data/snowex_lowman/slcs_geocoded/lowman_23205_21021_006_210322_L090VV_01_BC_s2_2x8.slc.real.tif
 data/snowex_lowman/slcs_geocoded/lowman_23205_21021_006_210322_L090VV_01_BC_s2_2x8.slc.tif
 data/snowex_lowman/slcs_geocoded/lowman_23205_21021_006_210322_L090VV_01_BC_s2_2x8.slc.tif.aux.xml
-data/snowex_lowman/slcs_geocodedlowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8.slc.tif
+data/snowex_lowman/slcs_geocoded/tmp/llh.dem.tif
+data/snowex_lowman/slcs_geocoded/tmp/llh.dem.vrt
+data/snowex_lowman/slcs_geocoded/tmp/llh.lat.tif
+data/snowex_lowman/slcs_geocoded/tmp/llh.lat.vrt
+data/snowex_lowman/slcs_geocoded/tmp/llh.long.tif
+data/snowex_lowman/slcs_geocoded/tmp/llh.long.vrt
+data/snowex_lowman/slcs_geocoded/tmp/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8.slc.imag.tif
+data/snowex_lowman/slcs_geocoded/tmp/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8.slc.imag.vrt
+data/snowex_lowman/slcs_geocoded/tmp/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8.slc.real.tif
+data/snowex_lowman/slcs_geocoded/tmp/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8.slc.real.vrt
 data/snowex_lowman/slcs_raw/lowman_05208_01_BU_s2_2x8.lkv
 data/snowex_lowman/slcs_raw/lowman_05208_01_BU_s2_2x8.llh
 data/snowex_lowman/slcs_raw/lowman_05208_01_BU.dop
