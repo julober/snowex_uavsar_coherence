@@ -413,7 +413,6 @@ data/snowex_lowman/snotel/Jackson_550_STAND_WATERYEAR=2021.csv
 data/snowex_lowman/snotel/Mores_637_STAND_WATERYEAR=2020.csv
 data/snowex_lowman/snotel/Mores_637_STAND_WATERYEAR=2021.csv
 data/snowex_lowman/tmp/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8_geoslc.tif
-data/snowex_lowman/tmp/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8_geoslc.tif.aux.xml
 data/snowex_lowman/tmp/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8.slc.imag.tif
 data/snowex_lowman/tmp/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8.slc.real.tif
 data/snowex_lowman/tmp/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8.slc.real.tif.aux.xml
