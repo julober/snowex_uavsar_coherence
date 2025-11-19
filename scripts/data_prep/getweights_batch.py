@@ -1,7 +1,10 @@
 import argparse
+import sys
 import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'scripts')))
 import numpy as np
 from pathlib import Path
+#from ..scripts import geocoding
 from geocoding import interp_weights
 
 def get_llh_paths(flight_num, llh_dir):
@@ -55,7 +58,7 @@ def main():
         tgt_pts = np.column_stack([tgt_lons.ravel(), tgt_lats.ravel()])
 
         out_fp = os.path.join(args.out_dir, f"lowman_{flight_num}_weights.npz")
-        print(f"Calculating weights for flight {flight_num} ...")
+        print(f"Calculating weight for flight {flight_num} ...")
         vtx, wts, invalid = interp_weights(src_pts, tgt_pts, save=True, out_fp=out_fp)
         print(f"Saved weights to {out_fp}")
 

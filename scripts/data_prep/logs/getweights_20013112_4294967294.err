@@ -1,0 +1,14 @@
+Run 'mamba init' to be able to run mamba activate/deactivate
+and start a new shell session. Or use conda to activate/deactivate.
+
+Run 'mamba init' to be able to run mamba activate/deactivate
+and start a new shell session. Or use conda to activate/deactivate.
+
+Traceback (most recent call last):
+  File "/projects/julo9057/snowex_uavsar_coherence/scripts/data_prep/getweights_batch.py", line 66, in <module>
+    main()
+    ~~~~^^
+  File "/projects/julo9057/snowex_uavsar_coherence/scripts/data_prep/getweights_batch.py", line 62, in main
+    vtx, wts, invalid = geocoding.interp_weights(src_pts, tgt_pts, save=True, out_fp=out_fp)
+                        ^^^^^^^^^
+NameError: name 'geocoding' is not defined

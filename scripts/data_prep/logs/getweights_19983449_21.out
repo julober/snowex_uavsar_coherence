@@ -1,0 +1,11 @@
+Run 'mamba init' to be able to run mamba activate/deactivate
+and start a new shell session. Or use conda to activate/deactivate.
+
+Run 'mamba init' to be able to run mamba activate/deactivate
+and start a new shell session. Or use conda to activate/deactivate.
+
+/var/spool/slurmd/job19994797/slurm_script: line 17: mamba: command not found
+Traceback (most recent call last):
+  File "/projects/julo9057/snowex_uavsar_coherence/scripts/data_prep/getweights_batch.py", line 5, in <module>
+    from geocoding import interp_weights
+ModuleNotFoundError: No module named 'geocoding'

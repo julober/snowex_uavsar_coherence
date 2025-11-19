@@ -1,0 +1,11 @@
+Run 'mamba init' to be able to run mamba activate/deactivate
+and start a new shell session. Or use conda to activate/deactivate.
+
+Run 'mamba init' to be able to run mamba activate/deactivate
+and start a new shell session. Or use conda to activate/deactivate.
+
+usage: getweights_batch.py [-h] --flight_nums FLIGHT_NUMS [FLIGHT_NUMS ...]
+                           --llh_dir LLH_DIR --ann_dir ANN_DIR
+                           --out_dir OUT_DIR [--rows ROWS] [--cols COLS]
+getweights_batch.py: error: argument --llh_dir: expected one argument
+/var/spool/slurmd/job19996519/slurm_script: line 32: mamda: command not found
