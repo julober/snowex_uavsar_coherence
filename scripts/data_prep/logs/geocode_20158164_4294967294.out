@@ -1,0 +1,3 @@
+Geocoding /projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/raw/lowman_23205_20002_007_200131_L090VV_01_BC_s2_2x8.slc
+Using preloaded weights from /projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/lowman_23205_weights.npz
+Calling geolocate_uavsar

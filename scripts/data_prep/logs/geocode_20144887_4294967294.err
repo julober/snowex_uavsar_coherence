@@ -1,0 +1,7 @@
+ls: cannot access '/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/raw/05208*.slc': No such file or directory
+ls: cannot access '/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/raw/05208*.ann': No such file or directory
+usage: geocode_batch.py [-h] [--slc_list SLC_LIST [SLC_LIST ...]]
+                        [--ann_list ANN_LIST [ANN_LIST ...]] --llh_fp LLH_FP
+                        --out_dir OUT_DIR [--weights_fp WEIGHTS_FP]
+                        [--n_jobs N_JOBS]
+geocode_batch.py: error: argument --slc_list: expected at least one argument

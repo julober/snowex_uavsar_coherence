@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/projects/julo9057/snowex_uavsar_coherence/scripts/data_prep/geocode_batch.py", line 2, in <module>
+    import numpy as np
+ModuleNotFoundError: No module named 'numpy'

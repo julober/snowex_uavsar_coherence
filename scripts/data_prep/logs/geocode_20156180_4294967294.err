@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/projects/julo9057/snowex_uavsar_coherence/scripts/data_prep/geocode_batch.py", line 37, in <module>
+    process_slc(slc, ann, args.llh_fp, args.out_dir, args.weights_fp)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/projects/julo9057/snowex_uavsar_coherence/scripts/data_prep/geocode_batch.py", line 23, in process_slc
+    geolocate_uavsar(slc_fp, ann_fp, llh_fp, out_dir, vtx=vtx, wts=wts, invalid=invalid)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/projects/julo9057/snowex_uavsar_coherence/scripts/geocoding.py", line 128, in geolocate_uavsar
+    lats = np.fromfile(llh_fp, 'f4')[0::3]
+           ~~~~~~~~~~~^^^^^^^^^^^^^^
+IsADirectoryError: [Errno 21] Is a directory: '/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/raw/'
