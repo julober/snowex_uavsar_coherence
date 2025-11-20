@@ -70,10 +70,14 @@ def plot_coherence_matrix(coh_matrix, dates=None):
         dates_dt = pd.to_datetime(dates)
 
     # Set ticks and labels
-    ax.set_xticks(range(len(dates)))
-    ax.set_yticks(range(len(dates)))
-    ax.set_xticklabels([d.strftime('%y/%m/%d') for d in dates_dt], rotation=90)
-    ax.set_yticklabels([d.strftime('%y/%m/%d') for d in dates_dt])
+    ax.set_xticks(range(len(dates_dt)))
+    ax.set_yticks(range(len(dates_dt)))
+    if dates is not None:
+        ax.set_xticklabels([d.strftime('%y/%m/%d') for d in dates_dt], rotation=90)
+        ax.set_yticklabels([d.strftime('%y/%m/%d') for d in dates_dt])
+    else:
+        ax.set_xticklabels(dates_dt)
+        ax.set_yticklabels(dates_dt)
 
     # Add colorbar
     cbar = fig.colorbar(cax)
