@@ -277,6 +277,8 @@ data/snowex_lowman/python_vars/lowman_23205_dates.npy
 data/snowex_lowman/python_vars/lowman_23205_pair_info.npy
 data/snowex_lowman/slcs_geocoded/coherence_lowman_52.tif
 data/snowex_lowman/slcs_geocoded/coherence_lowman_52.tif.aux.xml
+data/snowex_lowman/slcs_geocoded/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8_geoslc.tif
+data/snowex_lowman/slcs_geocoded/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8_geoslc.tif.aux.xml
 data/snowex_lowman/slcs_geocoded/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8.slc.imag.tif
 data/snowex_lowman/slcs_geocoded/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8.slc.real.tif
 data/snowex_lowman/slcs_geocoded/lowman_05208_20002_006_200131_L090VV_01_BU_s2_2x8.slc.real.tif.aux.xml
