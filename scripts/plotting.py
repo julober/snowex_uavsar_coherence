@@ -53,7 +53,7 @@ def plot_tifs_grid(tif_inputs,
 
     plt.show()
 
-def plot_coherence_matrix(coh_matrix, dates):
+def plot_coherence_matrix(coh_matrix, dates=None):
     """
     Plots a coherence matrix with dates as labels.
 
@@ -64,7 +64,10 @@ def plot_coherence_matrix(coh_matrix, dates):
     fig, ax = plt.subplots(figsize=(10, 8))
     cax = ax.matshow(coh_matrix, cmap='viridis', vmin=0, vmax=1)
 
-    dates_dt = pd.to_datetime(dates)
+    if dates is None:
+        dates_dt = [f"Date {i+1}" for i in range(coh_matrix.shape[0])]
+    else:
+        dates_dt = pd.to_datetime(dates)
 
     # Set ticks and labels
     ax.set_xticks(range(len(dates)))
