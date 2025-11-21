@@ -59,7 +59,7 @@ def interpolate_weights(values_flat, vtx, wts, invalid_mask=None):
 
     return gridded
 
-def save_real_imag_geotiff(real_arr, imag_arr, out_fp, transform, crs='EPSG:4326', nodata=np.nan):
+def save_geotiff(mode, data, out_fp, transform, crs='EPSG:4326', nodata=np.nan):
     """
     Save real and imag arrays as a 2-band GeoTIFF.
     real_arr, imag_arr: 2D numpy arrays with same shape (rows, cols)
@@ -69,22 +69,52 @@ def save_real_imag_geotiff(real_arr, imag_arr, out_fp, transform, crs='EPSG:4326
     nodata: nodata value to write
     """
     os.makedirs(os.path.dirname(out_fp), exist_ok=True)
-    dtype = 'float32'
-    height, width = real_arr.shape
-    with rasterio.open(
-        out_fp,
-        'w',
-        driver='GTiff',
-        height=height,
-        width=width,
-        count=2,
-        dtype=dtype,
-        crs=crs,
-        transform=transform,
-        nodata=nodata,
-    ) as dst:
-        dst.write(real_arr.astype(dtype), 1)
-        dst.write(imag_arr.astype(dtype), 2)
+    if mode == 'slc' :
+        if len(data) != 2 :
+            raise ValueError("For 'slc' mode, data must be a tuple of (real_arr, imag_arr)")
+        real_arr, imag_arr = data
+        dtype = 'float32'
+        height, width = real_arr.shape
+        with rasterio.open(
+            out_fp,
+            'w',
+            driver='GTiff',
+            height=height,
+            width=width,
+            count=2,
+            dtype=dtype,
+            crs=crs,
+            transform=transform,
+            nodata=nodata,
+        ) as dst:
+            dst.write(real_arr.astype(dtype), 1)
+            dst.write(imag_arr.astype(dtype), 2)
+    elif mode == 'lkv' :
+        if len(data) != 3 :
+            raise ValueError("For 'lkv' mode, data must be a tuple of (east_arr, north_arr, up_arr)")
+        east_arr, north_arr, up_arr = data
+        dtype = 'float32'
+        height, width = east_arr.shape
+        # out_fp_e = out_fp.replace('.tif', '_east.tif')
+        # out_fp_n = out_fp.replace('.tif', '_north.tif')
+        # out_fp_u = out_fp.replace('.tif', '_up.tif')
+        with rasterio.open(
+            out_fp,
+            'w',
+            driver='GTiff',
+            height=height,
+            width=width,
+            count=3,
+            dtype=dtype,
+            crs=crs,
+            transform=transform,
+            nodata=nodata,
+        ) as dst:
+            dst.write(east_arr.astype(dtype), 1)
+            dst.write(north_arr.astype(dtype), 2)
+            dst.write(up_arr.astype(dtype), 3)
+    else :
+        raise ValueError("mode must be either 'slc' or 'lkv'")
     return out_fp
 
 def geolocate_uavsar(slc_fp, 
@@ -127,7 +157,7 @@ def geolocate_uavsar(slc_fp,
     # Read llh file
     lats = np.fromfile(llh_fp, 'f4')[0::3]
     lons =  np.fromfile(llh_fp, 'f4')[1::3]
-    heights = np.fromfile(llh_fp, 'f4')[2::3].reshape(rows, cols)
+    heights = np.fromfile(llh_fp, 'f4')[2::3]
 
     src_pts = np.column_stack([lons.ravel(), lats.ravel()])
 
@@ -137,10 +167,21 @@ def geolocate_uavsar(slc_fp,
     tgt_lons, tgt_lats = np.meshgrid(lon_space, lat_space, indexing='xy')
     tgt_pts = np.column_stack([tgt_lons.ravel(), tgt_lats.ravel()])
 
-    # Only SLCs supported for now. 
-    if (Path(slc_fp).suffix != '.slc') : 
-        raise ValueError("Datafile is not a .slc file")
-    slc = np.fromfile(slc_fp, '<c8')
+    # Only SLCs and LKVs supported for now. 
+    mode = None
+    if (Path(slc_fp).suffix != '.slc' and Path(slc_fp).suffix != '.lkv') : 
+        raise ValueError("Datafile is not a .slc or a .lkv file")
+    elif (Path(slc_fp).suffix == '.slc') : 
+        mode = 'slc'
+        slc = np.fromfile(slc_fp, '<c8')
+    elif (Path(slc_fp).suffix == '.lkv') :
+        mode = 'lkv'
+        arr = np.fromfile(slc_fp, 'f4').reshape(rows, cols, 3)
+        east = arr[..., 0]
+        north = arr[..., 1]
+        up = arr[..., 2]
+
+
 
     if vtx is None or wts is None or invalid is None : 
         print("Vertices, weights, or invalid mask not given, calculating interpolation weights...")
@@ -152,8 +193,16 @@ def geolocate_uavsar(slc_fp,
 
     # interpolate slc to target grid 
     print(f"Interpolating {slc_fp} to target grid...")
-    gridded_flat = interpolate_weights(slc, vtx, wts, invalid_mask=invalid)
-    gridded = gridded_flat.reshape(tgt_lons.shape)
+    if mode == 'slc' :
+        gridded_flat = interpolate_weights(slc, vtx, wts, invalid_mask=invalid)
+        gridded = gridded_flat.reshape(tgt_lons.shape)
+    else :  # mode == 'lkv'
+        gridded_flat_e = interpolate_weights(east, vtx, wts, invalid_mask=invalid)
+        gridded_flat_n = interpolate_weights(north, vtx, wts, invalid_mask=invalid)
+        gridded_flat_u = interpolate_weights(up, vtx, wts, invalid_mask=invalid)
+        gridded = np.stack((gridded_flat_e.reshape(tgt_lons.shape),
+                            gridded_flat_n.reshape(tgt_lons.shape),
+                            gridded_flat_u.reshape(tgt_lons.shape)), axis=0)
 
     # build a geotransform for rasterio; careful: from_origin expects (west, north, xres, yres)
     xres = lon_space[1] - lon_space[0]
@@ -162,14 +211,24 @@ def geolocate_uavsar(slc_fp,
     north = lat_space.max()
     transform = from_origin(west, north, xres, yres)
 
-    new_fname = os.path.basename(slc_fp).replace('.slc', '_geoslc.tif')
+    if mode == 'slc' :
+        new_fname = os.path.basename(slc_fp).replace('.slc', '_geoslc.tif')
+        out_fp = os.path.join(out_dir, new_fname)
+        
+        real_out = np.real(gridded).astype('float32')
+        imag_out = np.imag(gridded).astype('float32')
+        real_out = np.flipud(np.real(gridded)).astype('float32')
+        imag_out = np.flipud(np.imag(gridded)).astype('float32')
+        save_geotiff('slc', (real_out, imag_out), out_fp, transform, crs='EPSG:4326')
+        print(f'Saved two-band GeoTIFF to {out_fp}')
+    elif mode == 'lkv' :
+        new_fname = os.path.basename(slc_fp).replace('.lkv', '_geolkv.tif')
+        out_fp = os.path.join(out_dir, new_fname)
 
-    out_fp = os.path.join(out_dir, new_fname)
-    real_out = np.real(gridded).astype('float32')
-    imag_out = np.imag(gridded).astype('float32')
-    real_out = np.flipud(np.real(gridded)).astype('float32')
-    imag_out = np.flipud(np.imag(gridded)).astype('float32')
-    save_real_imag_geotiff(real_out, imag_out, out_fp, transform, crs='EPSG:4326')
-    print(f'Saved two-band GeoTIFF to {out_fp}')
+        e_out = np.flipud(gridded[0].astype('float32'))
+        n_out = np.flipud(gridded[1].astype('float32'))
+        u_out = np.flipud(gridded[2].astype('float32'))
+        save_geotiff('lkv', (e_out, n_out, u_out), out_fp, transform, crs='EPSG:4326')
+        print(f'Saved three-band GeoTIFF to {out_fp}')
 
     return gridded, vtx, wts
