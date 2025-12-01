@@ -433,6 +433,9 @@ data/snowex_lowman/snex_qsi_lidar/SNEX20_QSI_DEM_0.5M_USIDDC_20210916_20210916.t
 data/snowex_lowman/snex_qsi_lidar/SNEX20_QSI_DEM_0.5M_USIDDC_20210916_20210916.tif.aux.xml
 data/snowex_lowman/snex_qsi_lidar/SNEX20_QSI_DEM_0.5M_USIDMC_20210917_20210917.tif
 data/snowex_lowman/snex_qsi_lidar/SNEX20_QSI_DEM_0.5M_USIDMC_20210917_20210917.tif.aux.xml
+data/snowex_lowman/snex_qsi_lidar/SNEX20_QSI_SD_0.5M_USIDMC_20200209_20200209.tif
+data/snowex_lowman/snex_qsi_lidar/SNEX20_QSI_SD_0.5M_USIDMC_20210315_20210315.tif
+data/snowex_lowman/snex_qsi_lidar/SNEX20_QSI_VH_0.5M_USIDMC_20200209_20200209.tif
 data/snowex_lowman/snotel/Jackson_550_STAND_WATERYEAR=2020.csv
 data/snowex_lowman/snotel/Jackson_550_STAND_WATERYEAR=2021.csv
 data/snowex_lowman/snotel/Mores_637_STAND_WATERYEAR=2020.csv
