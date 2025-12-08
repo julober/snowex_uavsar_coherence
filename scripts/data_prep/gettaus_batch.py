@@ -1,12 +1,14 @@
 # script that takes a list of coherence files and outputs tau values 
 from taus import get_taus_spatial
 import numpy as np
-import sys
-import os
 from pathlib import Path
 import argparse
 import rioxarray as rxa
 import rasterio
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'scripts')))
+from taus import get_taus_spatial
 
 # fit parameters
 tau_guess = 6
@@ -46,7 +48,7 @@ if __name__ == "__main__":
     height, width = coh_arrays[0].shape
     transform = coh_arrays[0].rio.transform()
     crs = coh_arrays[0].rio.crs
-    
+
     # save tau grid to output file
     with rasterio.open(
             out_dir + f'{args.out_fp}',
