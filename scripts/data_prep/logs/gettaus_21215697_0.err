@@ -1,0 +1,3 @@
+usage: gettaus_batch.py [-h] --coh_tifs COH_TIFS [COH_TIFS ...]
+                        --days DAYS [DAYS ...] --out_fp OUT_FP
+gettaus_batch.py: error: argument --days: invalid int value: '/projects/julo9057/snowex_uavsar_coherence/snowex_lowman/lowman_23205_day_intervals.txt'

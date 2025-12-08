@@ -1,0 +1,8 @@
+---- DEBUG ----
+cwd: /projects/julo9057/snowex_uavsar_coherence/scripts/data_prep
+args.days: /projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/lowman_23205_day_intervals.txt
+Is file? True
+Is dir? False
+sys.executable: /projects/julo9057/software/anaconda/envs/coherence/bin/python
+----------------
+Error: Number of coherence files does not match number of days entries.

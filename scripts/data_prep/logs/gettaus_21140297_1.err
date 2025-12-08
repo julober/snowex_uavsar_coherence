@@ -1,0 +1,10 @@
+Run 'mamba init' to be able to run mamba activate/deactivate
+and start a new shell session. Or use conda to activate/deactivate.
+
+Run 'mamba init' to be able to run mamba activate/deactivate
+and start a new shell session. Or use conda to activate/deactivate.
+
+Traceback (most recent call last):
+  File "/projects/julo9057/snowex_uavsar_coherence/scripts/data_prep/gettaus_batch.py", line 2, in <module>
+    from taus import get_taus_spatial
+ModuleNotFoundError: No module named 'taus'

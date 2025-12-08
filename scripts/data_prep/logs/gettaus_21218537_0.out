@@ -1,0 +1,3 @@
+---- DEBUG ----
+cwd: /projects/julo9057/snowex_uavsar_coherence/scripts/data_prep
+args.days: ['/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/lowman_23205_day_intervals.txt']

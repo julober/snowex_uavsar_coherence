@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/projects/julo9057/snowex_uavsar_coherence/scripts/data_prep/gettaus_batch.py", line 40, in <module>
+    print("Is file?", os.path.isfile(args.days))
+                      ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "<frozen genericpath>", line 39, in isfile
+TypeError: stat: path should be string, bytes, os.PathLike or integer, not list

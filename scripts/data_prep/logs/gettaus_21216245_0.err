@@ -1,0 +1,19 @@
+ValueError: could not convert string to float: '/projects/julo9057/snowex_uavsar_coherence/snowex_lowman/lowman_23205_day_intervals.txt'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/projects/julo9057/snowex_uavsar_coherence/scripts/data_prep/gettaus_batch.py", line 37, in <module>
+    days = np.loadtxt(days_fp, dtype=int)
+  File "/projects/julo9057/software/anaconda/envs/coherence/lib/python3.13/site-packages/numpy/lib/_npyio_impl.py", line 1395, in loadtxt
+    arr = _read(fname, dtype=dtype, comment=comment, delimiter=delimiter,
+                converters=converters, skiplines=skiprows, usecols=usecols,
+                unpack=unpack, ndmin=ndmin, encoding=encoding,
+                max_rows=max_rows, quote=quotechar)
+  File "/projects/julo9057/software/anaconda/envs/coherence/lib/python3.13/site-packages/numpy/lib/_npyio_impl.py", line 1046, in _read
+    arr = _load_from_filelike(
+        data, delimiter=delimiter, comment=comment, quote=quote,
+    ...<3 lines>...
+        encoding=encoding, filelike=filelike,
+        byte_converters=byte_converters)
+ValueError: could not convert string '/projects/julo9057/snowex_uavsar_coherence/snowex_lowman/lowman_23205_day_intervals.txt' to int64 at row 0, column 1.

@@ -20,14 +20,14 @@ conda activate coherence
 # Define arguments for each flight
 FLIGHT_IDS=("23205" "05208")
 COH_DIR=("/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/coherences")
-DAY_FILES=("/projects/julo9057/snowex_uavsar_coherence/snowex_lowman/lowman_23205_day_intervals.txt"
-           "/projects/julo9057/snowex_uavsar_coherence/snowex_lowman/lowman_05208_day_intervals.txt")
+DAY_FILES=("/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/lowman_23205_day_intervals.txt"
+           "/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/lowman_05208_day_intervals.txt")
 OUT_FPS=("/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/taus/lowman_23205_taus_2020_2021.tif"
          "/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/taus/lowman_05208_taus_2020_2021.tif")
 
 COH_FILES=(${COH_DIR}/*${FLIGHT_IDS[$SLURM_ARRAY_TASK_ID]}*.tif)
 DAY_FILE=${DAY_FILES[$SLURM_ARRAY_TASK_ID]}
-OUT_FP=${WEIGHTS_FPS[$SLURM_ARRAY_TASK_ID]}
+OUT_FP=${OUT_FPS[$SLURM_ARRAY_TASK_ID]}
 
 python gettaus_batch.py \
     --coh_tifs "${COH_FILES[@]}"  \

@@ -1,5 +1,4 @@
 # script that takes a list of coherence files and outputs tau values 
-from taus import get_taus_spatial
 import numpy as np
 from pathlib import Path
 import argparse
@@ -22,7 +21,7 @@ out_dir = '../data/snowex_lowman/taus/'
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--coh_tifs', nargs='+', required=True, help='List of coherence .tif files')
-    parser.add_argument('--days', nargs='+', required=True, type=int, help='File with number of days between scenes')
+    parser.add_argument('--days', nargs='+', required=True, help='File with number of days between scenes')
     parser.add_argument('--out_fp', required=True, help='Output file path for tau .npy file')
     args = parser.parse_args()
 
@@ -34,12 +33,23 @@ if __name__ == "__main__":
     coh_arr = np.stack(coh_arrays, axis=0)
 
     # read days between scenes file
-    days_fp = args.days
-    days = np.loadtxt(days_fp, dtype=int)
+    days_fp = args.days[0]
+    print("---- DEBUG ----")
+    print("cwd:", os.getcwd())
+    print("args.days:", days_fp)
+    print("Is file?", os.path.isfile(days_fp))
+    print("Is dir?", os.path.isdir(days_fp))
+    print("sys.executable:", sys.executable)
+    print("----------------")   
+    days = np.loadtxt(days_fp, dtype=float)
     days = np.array(days)
 
     if coh_arr.shape[0] != len(days):
         print("Error: Number of coherence files does not match number of days entries.")
+        print(f"Number of day intervals: {len(days)}")
+        print(days)
+        print(f"Number of coherence files: {len(args.coh_tifs)}")
+        print(args.coh_tifs)
         sys.exit(1)
 
     # calculate taus
