@@ -25,9 +25,13 @@ DAY_FILES=("/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/lowman
 OUT_FPS=("/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/taus/lowman_23205_taus_2020_2021.tif"
          "/projects/julo9057/snowex_uavsar_coherence/data/snowex_lowman/taus/lowman_05208_taus_2020_2021.tif")
 
+echo "Called with flight id: ${FLIGHT_IDS[$SLURM_ARRAY_TASK_ID]} and directory: ${COH_DIR}"
 COH_FILES=(${COH_DIR}/*${FLIGHT_IDS[$SLURM_ARRAY_TASK_ID]}*.tif)
+echo "Coherence tifs: ${COH_FILES}"
 DAY_FILE=${DAY_FILES[$SLURM_ARRAY_TASK_ID]}
+echo "Day file: ${DAY_FILE}"
 OUT_FP=${OUT_FPS[$SLURM_ARRAY_TASK_ID]}
+echo "Output file: ${OUT_FP}"
 
 python gettaus_batch.py \
     --coh_tifs "${COH_FILES[@]}"  \

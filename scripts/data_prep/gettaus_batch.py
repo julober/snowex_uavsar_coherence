@@ -15,7 +15,7 @@ bounds = (0,20)
 xtol=1e-6
 ftol=1e-6
 gamma_inf = 0.17  # or None to fit gamma
-out_dir = '../data/snowex_lowman/taus/'
+#out_dir = '../data/snowex_lowman/taus/'
 
 # takes command line arguments: <coherence_tifs> <days_between_scenes> <output_file>
 if __name__ == "__main__":
@@ -32,6 +32,8 @@ if __name__ == "__main__":
         coh_arrays.append(coh_data)
     coh_arr = np.stack(coh_arrays, axis=0)
 
+    print(f"Coherence array shape: {coh_arr.shape}")
+
     # read days between scenes file
     days_fp = args.days[0]
     print("---- DEBUG ----")
@@ -44,6 +46,8 @@ if __name__ == "__main__":
     days = np.loadtxt(days_fp, dtype=float)
     days = np.array(days)
 
+    print(f"Days array shape: {days.shape}")
+
     if coh_arr.shape[0] != len(days):
         print("Error: Number of coherence files does not match number of days entries.")
         print(f"Number of day intervals: {len(days)}")
@@ -53,15 +57,23 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # calculate taus
+    print("\nCalling get_taus_spatial with these parameters:") 
+    print(f"tau guess: {tau_guess}")
+    print(f"bounds: {bounds}")
+    print(f"xtol: {xtol}")
+    print(f"ftol: {ftol}")
+    print(f"gamma_inf: {gamma_inf}")
     tau_grid, success_grid = get_taus_spatial(coh_arr, days, tau_guess, bounds, xtol, ftol, gamma_inf)
+    print(f"Finished get_taus_spatial")
 
     height, width = coh_arrays[0].shape
     transform = coh_arrays[0].rio.transform()
     crs = coh_arrays[0].rio.crs
-
+    
+    print(f"Writing file {args.out_fp[0]}")
     # save tau grid to output file
     with rasterio.open(
-            out_dir + f'{args.out_fp}',
+            f'{args.out_fp[0]}',
             'w',
             driver='GTiff',
             height=height,
