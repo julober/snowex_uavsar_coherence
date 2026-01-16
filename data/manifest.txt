@@ -1,3 +1,0 @@
-manifest_nsidc_end.txt
-manifest.txt
-README.md
