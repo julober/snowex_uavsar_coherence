@@ -1,55 +1,109 @@
-name: snowex_uavsar_coherence
+name: coherence
 channels:
   - conda-forge
-  - defaults
 dependencies:
+  - _python_abi3_support=1.0
+  - affine=2.4.0
   - aiobotocore=2.24.2
+  - aiodns=3.0.0
+  - aiofiles=25.1.0
   - aiohappyeyeballs=2.6.1
   - aiohttp=3.12.15
+  - aiohttp-client-cache=0.14.3
   - aioitertools=0.12.0
   - aiosignal=1.4.0
+  - aiosqlite=0.22.1
+  - annotated-types=0.7.0
   - aom=3.9.1
   - appnope=0.1.4
   - asf_search=6.3.1
   - asttokens=3.0.0
+  - async-retriever=0.19.3
   - attrs=25.3.0
+  - aws-c-auth=0.9.1
+  - aws-c-cal=0.9.2
+  - aws-c-common=0.12.4
+  - aws-c-compression=0.3.1
+  - aws-c-event-stream=0.5.6
+  - aws-c-http=0.10.4
+  - aws-c-io=0.22.0
+  - aws-c-mqtt=0.13.3
+  - aws-c-s3=0.8.6
+  - aws-c-sdkutils=0.2.4
+  - aws-checksums=0.2.7
+  - aws-crt-cpp=0.34.4
+  - aws-sdk-cpp=1.11.606
+  - azure-core-cpp=1.16.1
+  - azure-identity-cpp=1.13.2
+  - azure-storage-blobs-cpp=12.15.0
+  - azure-storage-common-cpp=12.11.0
+  - azure-storage-files-datalake-cpp=12.13.0
   - blosc=1.21.6
   - botocore=1.40.18
   - bounded-pool-executor=0.0.3
+  - branca=0.8.2
+  - brotli=1.1.0
+  - brotli-bin=1.1.0
   - brotli-python=1.1.0
   - brunsli=0.1
   - bzip2=1.0.8
   - c-ares=1.34.5
   - c-blosc2=2.21.3
   - ca-certificates=2025.11.12
+  - cached-property=1.5.2
+  - cached_property=1.5.2
   - cartopy=0.25.0
+  - cattrs=25.2.0
   - certifi=2025.11.12
   - cffi=2.0.0
+  - cftime=1.6.5
   - charls=2.4.2
   - charset-normalizer=3.4.3
+  - click=8.3.1
+  - click-plugins=1.1.1.2
+  - cligj=0.7.2
+  - cloudpickle=3.1.2
   - colorama=0.4.6
+  - colorcet=3.1.0
   - comm=0.2.3
   - contourpy=1.3.3
+  - cpython=3.13.11
   - cycler=0.12.1
+  - cytoolz=1.1.0
+  - dask-core=2026.1.1
+  - datashader=0.18.2
   - dateparser=1.2.2
   - dav1d=1.2.1
   - debugpy=1.8.16
   - decorator=5.2.1
+  - defusedxml=0.7.1
+  - deprecated=1.3.1
+  - donfig=0.8.1.post1
   - earthaccess=0.15.1
   - exceptiongroup=1.3.0
   - executing=2.2.1
   - folium=0.20.0
+  - fonttools=4.61.1
   - freetype=2.14.1
   - freexl=2.0.0
   - frozenlist=1.7.0
   - fsspec=2025.9.0
-  - gdal=3.11.4
+  - gdal=3.10.3
   - geopandas=1.1.1
   - geopandas-base=1.1.1
   - geos=3.14.0
+  - geotiff=1.7.4
+  - gflags=2.2.2
   - giflib=5.2.2
+  - glog=0.7.1
+  - google-crc32c=1.8.0
   - h2=4.3.0
+  - h5netcdf=1.8.1
+  - h5py=3.15.1
+  - hdf4=4.2.15
+  - hdf5=1.14.6
   - hpack=4.1.0
+  - hydrosignatures=0.19.3
   - hyperframe=6.1.0
   - icu=75.1
   - idna=3.10
@@ -62,6 +116,7 @@ dependencies:
   - ipykernel=6.30.1
   - ipython=9.5.0
   - ipython_pygments_lexers=1.1.1
+  - itsdangerous=2.2.0
   - jedi=0.19.2
   - jinja2=3.1.6
   - jmespath=1.0.1
@@ -75,26 +130,37 @@ dependencies:
   - lazy-loader=0.4
   - lcms2=2.17
   - lerc=4.0.0
+  - libabseil=20250512.1
   - libaec=1.1.4
   - libarchive=3.8.1
+  - libarrow=22.0.0
+  - libarrow-acero=22.0.0
+  - libarrow-compute=22.0.0
+  - libarrow-dataset=22.0.0
+  - libarrow-substrait=22.0.0
   - libavif16=1.3.0
   - libblas=3.9.0
   - libbrotlicommon=1.1.0
   - libbrotlidec=1.1.0
   - libbrotlienc=1.1.0
   - libcblas=3.9.0
+  - libcrc32c=1.1.2
   - libcurl=8.14.1
   - libcxx=21.1.0
   - libdeflate=1.24
   - libedit=3.1.20250104
   - libev=4.33
+  - libevent=2.1.12
   - libexpat=2.7.1
   - libffi=3.4.6
   - libfreetype=2.14.1
   - libfreetype6=2.14.1
-  - libgdal-core=3.11.4
+  - libgdal-core=3.10.3
   - libgfortran=15.1.0
   - libgfortran5=15.1.0
+  - libgoogle-cloud=2.39.0
+  - libgoogle-cloud-storage=2.39.0
+  - libgrpc=1.73.1
   - libhwy=1.3.0
   - libiconv=1.18
   - libjpeg-turbo=3.1.0
@@ -103,39 +169,67 @@ dependencies:
   - liblapack=3.9.0
   - liblzma=5.8.1
   - libmpdec=4.0.0
+  - libnetcdf=4.9.3
   - libnghttp2=1.67.0
   - libopenblas=0.3.30
+  - libopentelemetry-cpp=1.21.0
+  - libopentelemetry-cpp-headers=1.21.0
+  - libparquet=22.0.0
   - libpng=1.6.50
+  - libprotobuf=6.31.1
+  - libre2-11=2025.11.05
   - librttopo=1.1.0
   - libsodium=1.0.20
   - libspatialite=5.1.0
   - libsqlite=3.50.4
   - libssh2=1.11.1
+  - libthrift=0.22.0
   - libtiff=4.7.1
+  - libutf8proc=2.11.3
   - libwebp-base=1.6.0
   - libxcb=1.17.0
   - libxml2=2.15.0
   - libxml2-16=2.15.0
   - libxml2-devel=2.15.0
+  - libxslt=1.1.43
+  - libzip=1.11.2
   - libzlib=1.3.1
   - libzopfli=1.0.3
   - llvm-openmp=21.1.2
+  - llvmlite=0.45.1
+  - locket=1.0.0
+  - lxml=6.0.2
   - lz4-c=1.10.0
   - lzo=2.10
   - mapclassify=2.10.0
+  - markupsafe=3.0.3
   - matplotlib-base=3.10.7
   - matplotlib-inline=0.1.7
   - minizip=4.0.10
+  - msgpack-python=1.1.2
   - multidict=6.6.3
-  - multimethod=2.0
+  - multimethod=2.0.2
+  - multipledispatch=0.6.0
+  - munkres=1.1.4
   - muparser=2.3.5
   - ncurses=6.5
   - nest-asyncio=1.6.0
+  - netcdf4=1.7.4
   - networkx=3.5
+  - nlohmann_json=3.12.0
+  - numba=0.62.1
+  - numcodecs=0.16.5
+  - numpy=2.3.5
   - openjpeg=2.5.4
   - openssl=3.6.0
+  - orc=2.2.1
+  - orjson=3.11.5
+  - owslib=0.35.0
   - packaging=25.0
+  - pandas=2.3.3
+  - param=2.3.1
   - parso=0.8.5
+  - partd=1.4.2
   - pcre2=10.46
   - pexpect=4.9.0
   - pickleshare=0.7.5
@@ -143,37 +237,63 @@ dependencies:
   - pip=25.2
   - platformdirs=4.4.0
   - pqdm=0.2.0
+  - prettytable=3.17.0
   - proj=9.7.0
+  - prometheus-cpp=1.3.0
   - prompt-toolkit=3.0.52
   - propcache=0.3.1
   - psutil=7.0.0
   - pthread-stubs=0.4
   - ptyprocess=0.7.0
   - pure_eval=0.2.3
+  - py3dep=0.19.0
+  - pyarrow=22.0.0
+  - pyarrow-core=22.0.0
+  - pycares=4.11.0
   - pycparser=2.22
+  - pyct=0.6.0
+  - pydantic=2.12.5
+  - pydantic-core=2.41.5
+  - pygeohydro=0.19.4
+  - pygeoogc=0.19.4
+  - pygeoutils=0.19.5
   - pygments=2.19.2
+  - pyinterpolate=1.2.1
+  - pynhd=0.19.4
+  - pyogrio=0.11.0
+  - pyparsing=3.3.1
   - pyproj=3.7.2
   - pyshp=3.0.2
   - pysocks=1.7.1
   - python=3.13.7
   - python-cmr=0.13.0
   - python-dateutil=2.9.0.post0
+  - python-gil=3.13.11
   - python-tzdata=2025.2
   - python_abi=3.13
   - pytz=2025.2
   - pywavelets=1.9.0
+  - pyyaml=6.0.3
   - pyzmq=27.0.2
   - qhull=2020.2
+  - rasterio=1.4.3
   - rav1e=0.7.1
+  - re2=2025.11.05
   - readline=8.2
+  - regex=2026.1.15
   - remotezip=0.12.3
   - requests=2.32.5
+  - requests-cache=1.3.0
+  - rioxarray=0.21.0
   - s3fs=2025.9.0
   - scikit-image=0.25.2
   - scikit-learn=1.7.2
+  - scipy=1.17.0
   - setuptools=80.9.0
+  - shapely=2.1.2
   - six=1.17.0
   - snappy=1.2.2
+  - snuggs=1.4.7
   - sqlite=3.50.4
   - stack_data=0.6.3
   - svt-av1=3.1.2
@@ -182,21 +302,30 @@ dependencies:
   - tifffile=2025.9.20
   - tinynetrc=1.3.1
   - tk=8.6.13
+  - toolz=1.1.0
   - tornado=6.5.2
   - tqdm=4.67.1
   - traitlets=5.14.3
   - typing-extensions=4.15.0
+  - typing-inspection=0.4.2
   - typing_extensions=4.15.0
   - tzdata=2025b
   - tzlocal=5.3.1
+  - ujson=5.11.0
   - uriparser=0.9.8
+  - url-normalize=2.2.1
   - urllib3=2.5.0
   - wcwidth=0.2.13
   - wrapt=1.17.3
+  - xarray=2026.1.0
+  - xarray-spatial=0.5.2
   - xerces-c=3.2.5
   - xorg-libxau=1.0.12
   - xorg-libxdmcp=1.1.5
+  - xyzservices=2025.11.0
+  - yaml=0.2.5
   - yarl=1.20.1
+  - zarr=3.1.5
   - zeromq=4.3.5
   - zfp=1.0.1
   - zipp=3.23.0
@@ -205,53 +334,36 @@ dependencies:
   - zstandard=0.25.0
   - zstd=1.5.7
   - pip:
-      - affine==2.4.0
-      - asf-search==10.0.2
-      - bleach==6.2.0
-      - bokeh==3.8.0
-      - branca==0.8.1
-      - click==8.2.1
-      - click-plugins==1.1.1.2
-      - cligj==0.7.2
-      - cloudpickle==3.1.1
-      - colorcet==3.1.0
-      - dask==2025.7.0
-      - datashader==0.18.2
-      - fonttools==4.59.2
-      - holoviews==1.21.0
-      - linkify-it-py==2.0.3
-      - llvmlite==0.44.0
-      - locket==1.0.0
-      - markdown==3.9
-      - markdown-it-py==4.0.0
-      - markupsafe==3.0.2
-      - matplotlib==3.10.6
-      - mdit-py-plugins==0.5.0
-      - mdurl==0.1.2
-      - multipledispatch==1.0.0
-      - narwhals==2.4.0
-      - numba==0.61.2
-      - numpy==2.2.2
-      - pandas==2.3.2
-      - panel==1.8.0
-      - param==2.2.1
-      - partd==1.4.2
-      - progressbar==2.5
-      - pyct==0.5.0
-      - pyogrio==0.11.1
-      - pyparsing==3.2.3
-      - pyviz-comms==3.0.6
-      - pyyaml==6.0.2
-      - rasterio==1.4.3
-      - regex==2025.9.1
-      - rioxarray==0.19.0
-      - scipy==1.16.1
-      - seaborn==0.13.2
-      - shapely==2.1.1
-      - toolz==1.0.0
-      - uavsar-pytools==0.7.1
-      - uc-micro-py==1.0.3
-      - webencodings==0.5.1
-      - xarray==2025.9.0
-      - xyzservices==2025.4.0
-prefix: /Users/julo9057/anaconda3/envs/snowex_uavsar_coherence
+    - Markdown==3.9
+    - MarkupSafe==3.0.2
+    - asf_search==10.0.2
+    - bleach==6.2.0
+    - bokeh==3.8.0
+    - branca==0.8.1
+    - fonttools==4.59.2
+    - holoviews==1.21.0
+    - linkify-it-py==2.0.3
+    - markdown-it-py==4.0.0
+    - matplotlib==3.10.6
+    - mdit-py-plugins==0.5.0
+    - mdurl==0.1.2
+    - narwhals==2.4.0
+    - numba==0.61.2
+    - pandas==2.3.2
+    - panel==1.8.0
+    - param==2.2.1
+    - progressbar==2.5
+    - pyparsing==3.2.3
+    - pyviz_comms==3.0.6
+    - regex==2025.9.1
+    - rioxarray==0.19.0
+    - scipy==1.16.1
+    - seaborn==0.13.2
+    - shapely==2.1.1
+    - uavsar-pytools==0.7.1
+    - uc-micro-py==1.0.3
+    - webencodings==0.5.1
+    - xarray==2025.9.0
+    - xyzservices==2025.4.0
+
+prefix: "/Users/JULIALOBER/miniforge3/envs/coherence"
