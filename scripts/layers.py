@@ -14,6 +14,7 @@ from validation import validate_aoi, validate_date_pairs, make_reference_grid
 def assemble_data(
     aoi, 
     date_pairs, 
+    fp_dest,
     crs = 'EPSG:4326', 
     resolution = 30,
 ) -> xr.Dataset: 
