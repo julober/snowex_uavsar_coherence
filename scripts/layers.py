@@ -1,4 +1,5 @@
 import shapely
+from shapely.geometry import Polygon
 import geopandas as gpd
 import py3dep
 
@@ -63,6 +64,8 @@ def assemble_data(
     aorc = get_aorc_layers(aoi, date_pairs, ref)
 
         # 5b. Get UCLA for each range 
+
+    snow = get_snow_layers(aoi, date_pairs, ref)
 
     ds = xr.Dataset()
     
@@ -159,11 +162,60 @@ def get_topo_layers(
 
     return ds
 
+import earthaccess
+
 def get_snow_layers(
     aoi, 
     date_pairs,
     ref_grid = None
-)
+):
+    # turn aoi into list of points in counter-clockwise order 
+    xx, yy = aoi.exterior.coords.xy
+    x = xx.tolist()
+    y = yy.tolist()
+
+    years = get_years(date_pairs)
+
+    grans = earthaccess.search_data(
+        short_name='WUS_UCLA_SR', 
+        cloud_hosted=True, 
+        temporal=(years[0], years[-1]),
+        polygon=zip(x,y)
+    )
+
+    fileset = earthaccess.open(grans)
+    ds = xr.open_mfdataset(fileset, chunks={})
+
+
+def get_snow_metrics(
+    ds,
+    metrics = 'all'
+) -> dict:
+    
+    out = {}
+
+    valid_metrics = [
+        'total_swe',
+        'max_swe',
+        'snow_cover_change'
+    ]
+
+    if metrics == 'all':
+        metrics = valid_metrics
+    else:
+        for metric in metrics:
+            if metric not in valid_metrics:
+                raise ValueError(f"Invalid metric: {metric}. Valid metrics are: {valid_metrics}")
+
+    if 'total_swe' in metrics: 
+        out['total_swe'] = ds['SWE_Post'].sum(dim='time')
+    if 'max_swe' in metrics: 
+        out['max_swe'] = ds['SWE_Post'].max(dim='time')
+    if 'snow_cover_change' in metrics: 
+        out['snow_cover_change'] = ds['SCA_Post']
+
+    return out
+
 
 import s3fs
 import fsspec
@@ -244,12 +296,18 @@ def get_aorc_metrics(
 
     ds = {}
 
+    valid_metrics = [
+        'mean_temp',
+        'max_temp',
+        'total_precip'
+    ]
+
     if metrics == 'all':
-        metrics = [
-            'mean_temp',
-            'max_temp',
-            'total_precip'
-        ]
+        metrics = valid_metrics
+    else:
+        for metric in metrics:
+            if metric not in valid_metrics:
+                raise ValueError(f"Invalid metric: {metric}. Valid metrics are: {valid_metrics}")
 
     if 'mean_temp' in metrics: 
         ds['mean_temp'] = aorc_ds['TMP_2maboveground'].mean(dim='time')
