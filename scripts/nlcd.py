@@ -1,8 +1,7 @@
-def get_nlcd_layers(geometry, 
-                    out_fp,
+def get_nlcd_layers(aoi, 
+                    # out_fp,
                     years={'cover': [2019], 'canopy': [2019]},
-                    crs_dest='EPSG:26911',
-                    res_dest=30) :
+                    ref_grid = None) :
     """
     Get NLCD Layers. Saves the layers as tifs to the specified output filepath
     if they don't already exists, returns the reprojected layers as a dict. 
@@ -37,31 +36,33 @@ def get_nlcd_layers(geometry,
     import os 
 
     # check that geometry is a GeoDataFrame and has a CRS 
-    if not isinstance(geometry, gpd.GeoDataFrame):
+    if not isinstance(aoi, gpd.GeoDataFrame):
         raise ValueError("Input geometry must be a GeoDataFrame.")
-    if not out_fp:
-        raise ValueError("Output file path must be provided.")
-    if geometry.crs != 'EPSG:4326':
+    # if not out_fp:
+    #     raise ValueError("Output file path must be provided.")
+    if aoi.crs != 'EPSG:4326':
         raise ValueError("Input geometry must be in EPSG:4326 (WGS84).")
     
     # get nlcd
-    nlcd_layers = gh.nlcd_bygeom(geometry=geometry,
-                                years=years)
+    nlcd_layers = gh.nlcd_bygeom(geometry=aoi,
+                                 years=years)
     
     nlcd_reproj = {}
-    for key, value in nlcd_layers.items():
-        nlcd_reproj[key] = value.rio.reproject(crs_dest, resolution=res_dest)
+    if ref_grid is not None : 
+        for key, value in nlcd_layers.items():
+            nlcd_reproj[key] = value.rio.reproject_match(ref_grid)
+        return nlcd_reproj
 
     # save as tifs 
-    for key, value in nlcd_reproj.items():
-        # check that file doesn't already exist 
-        if os.path.exists(f"{out_fp}_{key}.tif"):
-            raise ValueError(f"File {out_fp}_{key}.tif already exists.")
-        else:
-            value.rio.to_raster(f"{out_fp}_{key}.tif")
+    # for key, value in nlcd_reproj.items():
+    #     # check that file doesn't already exist 
+    #     if os.path.exists(f"{out_fp}_{key}.tif"):
+    #         raise ValueError(f"File {out_fp}_{key}.tif already exists.")
+    #     else:
+    #         value.rio.to_raster(f"{out_fp}_{key}.tif")
 
     # will download 2019 automatically - should I use 2021 instead? 
-    return nlcd_reproj
+    return nlcd_layers
 
 # big ugly function to get a colormap for the land cover types  
 def get_landcover_cmap() : 
