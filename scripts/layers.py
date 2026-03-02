@@ -48,9 +48,9 @@ def assemble_data(
 
     # 2. Create reference grid 
     if crs == 'EPSG:4326' and resolution == 30:
-        resolution = 0.00381807117 # 30 m at 45 deg latitude 
+        res_deg = 0.00381807117 # 30 m at 45 deg latitude 
     # 
-    ref = make_reference_grid(aoi=aoi, crs=crs, resolution=resolution)
+    ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_deg)
 
     data = xr.Dataset()
 
@@ -59,12 +59,12 @@ def assemble_data(
     print(f"Got NLCD: {type(nlcd)}")
 
     # 4. Get DEM 
-    print(f'Making call to py3dep.get_map...')
-    dem = py3dep.get_map("DEM", geometry=aoi, resolution=resolution, crs='EPSG:4326')
+    print(f'Making call to py3dep.get_map with resolution {resolution} in m.')
+    dem = py3dep.get_dem(geometry=aoi, resolution=resolution, crs=crs)
+    dem.rio.write_crs(crs)
+    dem = dem.rio.reproject_match(ref)
     print(f"Got DEM: {type(dem)}")
     topo = get_topo_layers(dem=dem, ref_grid=ref)
-
-    data = xr.merge([nlcd, dem, topo])
 
     
     # 5. Loop through date pairs
@@ -78,6 +78,7 @@ def assemble_data(
     # snow = get_snow_layers(aoi=aoi, date_pairs=date_pairs, ref_grid=ref)
     # print(f"Got snow: {type(snow)}")
 
+    data = xr.merge([nlcd, dem, topo])
     return data
     
 
@@ -157,7 +158,7 @@ def get_topo_layers(
 ):
     ds = {}
 
-    if dem.crs == 'EPSG:4326':
+    if dem.rio.crs == 'EPSG:4326':
         dem_reproj = dem.rio.reproject('EPSG:5070')
     else:
         dem_reproj = dem
