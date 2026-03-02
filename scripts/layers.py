@@ -52,14 +52,20 @@ def assemble_data(
     # 
     ref = make_reference_grid(aoi=aoi, crs=crs, resolution=resolution)
 
+    data = xr.Dataset()
+
     # 3. Get NLCD layers 
     nlcd = get_nlcd_layers(aoi=aoi_gdf, ref_grid=ref)
     print(f"Got NLCD: {type(nlcd)}")
 
     # 4. Get DEM 
-    # dem = py3dep.get_dem(aoi, resolution)
-    # print(f"Got DEM: {type(dem)}")
-    # topo = get_topo_layers(dem=dem, ref_grid=ref)
+    print(f'Making call to py3dep.get_map...')
+    dem = py3dep.get_map("DEM", geometry=aoi, resolution=resolution, crs='EPSG:4326')
+    print(f"Got DEM: {type(dem)}")
+    topo = get_topo_layers(dem=dem, ref_grid=ref)
+
+    data = xr.merge([nlcd, dem, topo])
+
     
     # 5. Loop through date pairs
     # for idx, (start_date, end_date) in enumerate(date_pairs) :
@@ -72,7 +78,7 @@ def assemble_data(
     # snow = get_snow_layers(aoi=aoi, date_pairs=date_pairs, ref_grid=ref)
     # print(f"Got snow: {type(snow)}")
 
-    return nlcd
+    return data
     
 
 
@@ -129,7 +135,7 @@ def get_nlcd_layers(
 
     nlcd_reproj = {}
     if ref_grid is not None : 
-        nlcd_reproj[key] = value.rio.reproject_match(ref_grid)
+        nlcd_reproj = nlcd_layers.rio.reproject_match(ref_grid)
         return nlcd_reproj
 
     # save as tifs 
