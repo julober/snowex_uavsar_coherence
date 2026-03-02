@@ -50,25 +50,29 @@ def assemble_data(
     if crs == 'EPSG:4326' and resolution == 30:
         resolution = 0.00381807117 # 30 m at 45 deg latitude 
     # 
-    ref = make_reference_grid(aoi, crs, resolution)
+    ref = make_reference_grid(aoi=aoi, crs=crs, resolution=resolution)
 
     # 3. Get NLCD layers 
-    nlcd = get_nlcd_layers(aoi_gdf, ref)
+    nlcd = get_nlcd_layers(aoi=aoi_gdf, ref_grid=ref)
+    print(f"Got NLCD: {type(nlcd)}")
 
     # 4. Get DEM 
-    dem = py3dep.get_dem(aoi, resolution)
-    topo = get_topo_layers(dem, ref)
+    # dem = py3dep.get_dem(aoi, resolution)
+    # print(f"Got DEM: {type(dem)}")
+    # topo = get_topo_layers(dem=dem, ref_grid=ref)
     
     # 5. Loop through date pairs
     # for idx, (start_date, end_date) in enumerate(date_pairs) :
     # 5a. Get AORC for each range 
-    aorc = get_aorc_layers(aoi, date_pairs, ref)
+    # aorc = get_aorc_layers(aoi=aoi, date_pairs=date_pairs, ref_grid=ref)
+    # print(f"Got AORC: {type(aorc)}")
 
-        # 5b. Get UCLA for each range 
+    # 5b. Get UCLA for each range 
 
-    snow = get_snow_layers(aoi, date_pairs, ref)
+    # snow = get_snow_layers(aoi=aoi, date_pairs=date_pairs, ref_grid=ref)
+    # print(f"Got snow: {type(snow)}")
 
-    ds = xr.Dataset()
+    return nlcd
     
 
 
@@ -77,7 +81,7 @@ def get_nlcd_layers(
     # out_fp,
     years={'cover': [2019], 'canopy': [2019]},
     ref_grid = None
-)-> dict:
+)-> xr.Dataset:
     """
     Get NLCD Layers. Saves the layers as tifs to the specified output filepath
     if they don't already exists, returns the reprojected layers as a dict. 
@@ -121,12 +125,11 @@ def get_nlcd_layers(
     
     # get nlcd
     nlcd_layers = gh.nlcd_bygeom(geometry=aoi,
-                                 years=years)
-    
+                                 years=years)[0]
+
     nlcd_reproj = {}
     if ref_grid is not None : 
-        for key, value in nlcd_layers.items():
-            nlcd_reproj[key] = value.rio.reproject_match(ref_grid)
+        nlcd_reproj[key] = value.rio.reproject_match(ref_grid)
         return nlcd_reproj
 
     # save as tifs 
