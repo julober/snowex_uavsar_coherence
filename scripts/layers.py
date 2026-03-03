@@ -262,13 +262,16 @@ def get_aorc_layers(
 
     years = get_years(date_pairs)
 
+    print(years)
     s3_out = s3fs.S3FileSystem(anon=True)
     # print(years)
     fileset = [s3fs.S3Map(
                     root=f"s3://{base_url}/{yr}.zarr", s3=s3_out, check=False
                 ) for yr in years]
+    print(fileset)
     ds_full = xr.open_mfdataset(fileset, engine='zarr')
 
+    print(ds_full)
     # clip to the aoi 
     ds_clip = ds_full.rio.clip(aoi.geometry.values, crs=crs)
 
