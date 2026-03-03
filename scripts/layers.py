@@ -70,7 +70,7 @@ def assemble_data(
     # 5. Loop through date pairs
     # for idx, (start_date, end_date) in enumerate(date_pairs) :
     # 5a. Get AORC for each range 
-    # aorc = get_aorc_layers(aoi=aoi, date_pairs=date_pairs, ref_grid=ref)
+    aorc = get_aorc_layers(aoi=aoi, date_pairs=date_pairs, crs=crs, ref_grid=ref)
     # print(f"Got AORC: {type(aorc)}")
 
     # 5b. Get UCLA for each range 
@@ -78,8 +78,9 @@ def assemble_data(
     # snow = get_snow_layers(aoi=aoi, date_pairs=date_pairs, ref_grid=ref)
     # print(f"Got snow: {type(snow)}")
 
-    data = xr.merge([nlcd, dem, topo])
-    return data
+    static = xr.merge([nlcd, dem, topo])
+    # dynamic = xr.merge([aorc, snow])
+    return static#, dynamic
     
 
 
