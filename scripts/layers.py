@@ -234,8 +234,9 @@ import fsspec
 def get_aorc_layers(
     aoi, 
     date_pairs, 
+    crs,
     ref_grid = None
-): 
+) -> xr.Dataset: 
     """
     Get AORC layers for the given AOI and date pairs. Returns a dictionary of 
     xarray DataArrays, with keys corresponding to the variable names. 
@@ -261,31 +262,44 @@ def get_aorc_layers(
     years = get_years(date_pairs)
 
     s3_out = s3fs.S3FileSystem(anon=True)
+    # print(years)
     fileset = [s3fs.S3Map(
                     root=f"s3://{base_url}/{yr}.zarr", s3=s3_out, check=False
                 ) for yr in years]
     ds_full = xr.open_mfdataset(fileset, engine='zarr')
 
     # clip to the aoi 
-    ds_clip = ds_full.rio.clip(aoi, crs=aoi.crs)
+    ds_clip = ds_full.rio.clip(aoi.geometry.values, crs=crs)
 
+    ds = xr.Dataset()
+    ds_list = []
     # get metrics for each date pair
-    for start_date, end_date in date_pairs:
+    for i, (start_date, end_date) in enumerate(date_pairs):
         ds_slice = ds_clip.sel(time=slice(start_date, end_date))
-        ds = get_aorc_metrics(ds_slice)
+
+        # ran into some missing data (e.g. 2021/02-2021/11)
+        if (len(ds_slice['time']) == 0): 
+            print(f'Could not get AORC data for {start_date} to {end_date}.')
+            continue
+
+        ds_metrics = get_aorc_metrics(ds_slice)
+        pair_name = start_date.strftime('%Y%m%d') + "_" + end_date.strftime('%Y%m%d')
+        ds_metrics['pair'] = pair_name
+
+        ds_list.append(ds_metrics)
 
         # reproject to reference grid 
         if ref_grid is not None : 
-            for key, value in ds.items():
-                ds[key] = value.rio.reproject_match(ref_grid)
+            ds_metrics = ds_metrics.rio.reproject_match(ref_grid)
 
+    ds = xr.concat(ds_list, dim='pair')
     return ds
 
 def get_aorc_metrics(
     aorc_ds,
     # date_pair,
     metrics = 'all'
-) -> dict:
+) -> xr.Dataset:
     """
     Get a list of available AORC metrics. If list_metrics is 'all', returns a 
     list of all available metrics. If list_metrics is a list of metric names, 
@@ -305,7 +319,7 @@ def get_aorc_metrics(
     
     """
 
-    ds = {}
+    ds = xr.Dataset()
 
     valid_metrics = [
         'mean_temp',
