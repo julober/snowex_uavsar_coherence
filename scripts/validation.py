@@ -294,3 +294,59 @@ def make_reference_grid(
     da = da.rio.write_transform(transform)
 
     return da
+
+import xarray as xr
+
+def validate_alignment(
+    datasets, 
+    coord_names=['y', 'x']
+):
+    """
+    Checks if a list of xarray objects share identical coordinate values.
+    
+    Args:
+        datasets (list): List of xr.Dataset or xr.DataArray objects.
+        coord_names (list): The specific coordinates to verify (default: lat/lon).
+        
+    Returns:
+        bool: True if all match perfectly, False otherwise.
+    """
+    errors = []
+    
+    # 1. Check if all datasets actually contain the required coordinates
+    for i, ds in enumerate(datasets):
+        missing = [c for c in coord_names if c not in ds.coords]
+        if missing:
+            errors.append(f"Dataset [{i}] is missing coordinates: {missing}")
+
+    if errors:
+        for error in errors:
+            print(error)
+        return False
+
+    # 2. Try to align them using 'exact' join
+    try:
+        # If they don't match perfectly, xarray raises a ValueError
+        xr.align(*datasets, join="exact")
+        # print("Validation Passed: All grids match perfectly.")
+        return True
+        
+    except ValueError as e:
+        print("Grid mismatch detected.")
+        print("-" * 55)
+        
+        # 3. Generate the Overview Output
+        header = f"{'Index':<7} | {'Name':<15} | " + " | ".join([f"{c:<10}" for c in coord_names])
+        print(header)
+        print("-" * 55)
+        
+        for i, ds in enumerate(datasets):
+            # Get the size of the requested coordinates
+            dims_str = " | ".join([f"{ds[c].size:<10}" for c in coord_names if c in ds.coords])
+            name = getattr(ds, 'name', None) or f'Dataset_{i}'
+            print(f"{i:<7} | {str(name)[:15]:<15} | {dims_str}")
+            
+        print("-" * 55)
+        print(f"Error Detail: {e}")
+        return False
+    
