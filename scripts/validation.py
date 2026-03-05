@@ -324,6 +324,16 @@ def validate_alignment(
             print(error)
         return False
 
+    # check that datasets with pair dimensions have the same values
+    for i, ds in enumerate(datasets):
+        if 'pair' in ds.dims:
+            pair_values = ds['pair'].values
+            for j, other_ds in enumerate(datasets):
+                if i != j and 'pair' in other_ds.dims:
+                    other_pair_values = other_ds['pair'].values
+                    if not np.array_equal(pair_values, other_pair_values):
+                        errors.append(f"Dataset [{i}] has different 'pair' values than Dataset [{j}].")
+
     # 2. Try to align them using 'exact' join
     try:
         # If they don't match perfectly, xarray raises a ValueError

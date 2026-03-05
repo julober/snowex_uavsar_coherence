@@ -16,9 +16,11 @@ def assemble_data(
     aoi, 
     date_pairs, 
     fp_dest,
-    fp_snowclimate = '../data/',
+    fp_coherence = '../data/coherence/',
+    fp_snowclimate = '../data/NSIDC-0768/',
     crs = 'EPSG:4326', 
     res = 30,
+    overwrite = False
 ) -> xr.Dataset: 
     
     """
@@ -54,8 +56,17 @@ def assemble_data(
     # 
     ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_deg)
 
+    # 2. Get UAVSAR coherence layers
+    coh = get_uavsar_coherence(aoi=aoi, 
+                               date_pairs=date_pairs, 
+                               crs=crs, 
+                               ref_grid=ref, 
+                               fp=fp_coherence)
+    print(coh)
+    # print(coh['pair'].values)
+
     # 3. Get NLCD layers 
-    nlcd = get_nlcd_layers(aoi=aoi_gdf, ref_grid=ref)
+    nlcd = get_nlcd_layers(aoi=aoi, crs=crs, ref_grid=ref)
     print(f"Got NLCD: {type(nlcd)}")
 
     # 4. Get DEM 
@@ -81,9 +92,12 @@ def assemble_data(
     # 5b. Get UCLA for each range 
 
     snow = get_snow_layers(aoi=aoi, date_pairs=date_pairs, crs=crs, ref_grid=ref)
+    # print(snow['pair'].values)
+
     # print(f"Got snow: {type(snow)}")
 
-    ds_list = [nlcd, dem, topo, snow_class, snow]
+    ds_list = [coh, nlcd, dem, topo, snow_class, snow]
+    # ds_list = [nlcd, dem, topo, snow_class, snow]
     validate_alignment(ds_list)
 
     ds = xr.merge(ds_list, join='exact')
@@ -111,16 +125,72 @@ def assemble_data(
     # ds_chunked.to_zarr('my_unified_cube.zarr', mode='w', consolidated=True)
 
     if fp_dest is not None: 
-        ds_chunked.to_zarr(fp_dest, 
-                           mode='w-', 
-                           consolidated=True)
+        if overwrite: 
+            ds_chunked.to_zarr(fp_dest, 
+                               mode='w', 
+                               consolidated=True)
+        else:
+            ds_chunked.to_zarr(fp_dest, 
+                            mode='w-', 
+                            consolidated=True)
     
     return ds
     
 
+def get_uavsar_coherence(
+    aoi, 
+    date_pairs, 
+    crs,
+    fp,
+    ref_grid = None,
+) -> xr.Dataset: 
+
+    # find files
+    files = os.listdir(fp)
+    # filter files by date pairs
+    fname_pairs = {}
+    for f in files:
+        # print(f)
+        for start_date, end_date in date_pairs:
+            sd_str = start_date.strftime('%y%m%d')
+            ed_str = end_date.strftime('%y%m%d')
+            if sd_str in f and ed_str in f:
+                # print(f'Found file {f} for pair: {sd_str}_{ed_str}')
+                fname_pairs[f'{sd_str}_{ed_str}'] = f
+    
+    # open files as xarray dataset with pair dimension
+    ds_list = []
+    for k, f in fname_pairs.items():
+        ds = xr.open_dataset(fp + f, chunks={})
+        ds.rio.write_crs(crs, inplace=True)
+        ds = ds.rename({list(ds.data_vars.keys())[0]: 'coherence'})
+        ds['pair'] = k
+        ds_list.append(ds)
+
+    ds = xr.concat(ds_list, dim='pair')
+    ds = ds.sortby('pair')
+
+    # check that geometry is a GeoDataFrame and has a CRS 
+    # if not isinstance(aoi, gpd.GeoDataFrame):
+    #     raise ValueError("Input geometry must be a GeoDataFrame.")
+    # if aoi.crs != 'EPSG:4326':
+    #     raise ValueError("Input geometry must be in EPSG:4326 (WGS84).")
+    
+    
+
+    if ref_grid is not None : 
+        ds = ds.rio.reproject_match(ref_grid)
+
+    return ds
+
+
+# =============================================================================
+# FUNCTIONS FOR DOWNLOADING ENVIRONMENTAL DATA
+# =============================================================================
 
 def get_nlcd_layers(
     aoi, 
+    crs,
     # out_fp,
     years={'cover': [2019], 'canopy': [2019]},
     ref_grid = None
@@ -158,16 +228,18 @@ def get_nlcd_layers(
     import geopandas as gpd
     import os 
 
+    g = gpd.GeoSeries([aoi], crs=crs)
+
     # check that geometry is a GeoDataFrame and has a CRS 
-    if not isinstance(aoi, gpd.GeoDataFrame):
-        raise ValueError("Input geometry must be a GeoDataFrame.")
+    # if not isinstance(aoi, gpd.GeoDataFrame):
+    #     raise ValueError("Input geometry must be a GeoDataFrame.")
     # if not out_fp:
     #     raise ValueError("Output file path must be provided.")
-    if aoi.crs != 'EPSG:4326':
-        raise ValueError("Input geometry must be in EPSG:4326 (WGS84).")
+    # if aoi.crs != 'EPSG:4326':
+    #     raise ValueError("Input geometry must be in EPSG:4326 (WGS84).")
     
     # get nlcd
-    ds = gh.nlcd_bygeom(geometry=aoi, years=years)[0]
+    ds = gh.nlcd_bygeom(geometry=g, years=years)[0]
 
     # ds = ds.rename({'cover_2019': 'cover', 'canopy_2019': 'canopy'})
 
@@ -331,7 +403,7 @@ def get_snow_layers(
 
         ds_metrics = get_snow_metrics(ds_slice,
                                       metrics=['swe_change', 'sd_change'])
-        pair_name = start_date.strftime('%Y%m%d') + "_" + end_date.strftime('%Y%m%d')
+        pair_name = start_date.strftime('%y%m%d') + "_" + end_date.strftime('%y%m%d')
         ds_metrics['pair'] = pair_name
 
         ds_list.append(ds_metrics)
@@ -341,6 +413,7 @@ def get_snow_layers(
         #     ds_metrics = ds_metrics.rio.reproject_match(ref_grid)
 
     ds = xr.concat(ds_list, dim='pair')
+    ds = ds.sortby('pair')
     if ref_grid is not None : 
         ds = ds.rio.reproject_match(ref_grid)
     return ds
@@ -498,7 +571,7 @@ def get_aorc_layers(
             continue
 
         ds_metrics = get_aorc_metrics(ds_slice)
-        pair_name = start_date.strftime('%Y%m%d') + "_" + end_date.strftime('%Y%m%d')
+        pair_name = start_date.strftime('%y%m%d') + "_" + end_date.strftime('%y%m%d')
         ds_metrics['pair'] = pair_name
 
         ds_list.append(ds_metrics)
