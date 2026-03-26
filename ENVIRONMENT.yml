@@ -39,6 +39,7 @@ dependencies:
   - azure-storage-common-cpp=12.11.0
   - azure-storage-files-datalake-cpp=12.13.0
   - blosc=1.21.6
+  - bokeh=3.9.0
   - botocore=1.40.18
   - bounded-pool-executor=0.0.3
   - branca=0.8.2
@@ -70,6 +71,7 @@ dependencies:
   - cpython=3.13.11
   - cycler=0.12.1
   - cytoolz=1.1.0
+  - dask=2026.1.1
   - dask-core=2026.1.1
   - datashader=0.18.2
   - dateparser=1.2.2
@@ -78,6 +80,7 @@ dependencies:
   - decorator=5.2.1
   - defusedxml=0.7.1
   - deprecated=1.3.1
+  - distributed=2026.1.1
   - donfig=0.8.1.post1
   - earthaccess=0.15.1
   - exceptiongroup=1.3.0
@@ -199,6 +202,7 @@ dependencies:
   - llvmlite=0.45.1
   - locket=1.0.0
   - lxml=6.0.2
+  - lz4=4.4.5
   - lz4-c=1.10.0
   - lzo=2.10
   - mapclassify=2.10.0
@@ -206,12 +210,15 @@ dependencies:
   - matplotlib-base=3.10.7
   - matplotlib-inline=0.1.7
   - minizip=4.0.10
+  - ml4xcube=1.1.0
   - msgpack-python=1.1.2
   - multidict=6.6.3
   - multimethod=2.0.2
   - multipledispatch=0.6.0
   - munkres=1.1.4
   - muparser=2.3.5
+  - mypy_extensions=1.1.0
+  - narwhals=2.18.1
   - ncurses=6.5
   - nest-asyncio=1.6.0
   - netcdf4=1.7.4
@@ -280,6 +287,7 @@ dependencies:
   - rav1e=0.7.1
   - re2=2025.11.05
   - readline=8.2
+  - rechunker=0.5.2
   - regex=2026.1.15
   - remotezip=0.12.3
   - requests=2.32.5
@@ -294,9 +302,11 @@ dependencies:
   - six=1.17.0
   - snappy=1.2.2
   - snuggs=1.4.7
+  - sortedcontainers=2.4.0
   - sqlite=3.50.4
   - stack_data=0.6.3
   - svt-av1=3.1.2
+  - tblib=3.2.2
   - tenacity=9.1.2
   - threadpoolctl=3.6.0
   - tifffile=2025.9.20
@@ -328,6 +338,7 @@ dependencies:
   - zarr=3.1.5
   - zeromq=4.3.5
   - zfp=1.0.1
+  - zict=3.0.0
   - zipp=3.23.0
   - zlib=1.3.1
   - zlib-ng=2.2.5
@@ -347,7 +358,6 @@ dependencies:
     - matplotlib==3.10.6
     - mdit-py-plugins==0.5.0
     - mdurl==0.1.2
-    - narwhals==2.4.0
     - numba==0.61.2
     - pandas==2.3.2
     - panel==1.8.0

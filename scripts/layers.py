@@ -40,9 +40,8 @@ def assemble_data(
         .zmetadata
 
     TODO: 
-    - make this adaptable in case files already exist. 
-    - save all output as files  
     - figure out how to handle the two directions of flights 
+
 
     """
 
@@ -93,7 +92,24 @@ def assemble_data(
 
     # 5a. Get AORC for each range 
     s = time.time()
-    aorc = get_aorc_layers(aoi=aoi, date_pairs=date_pairs, crs=crs, ref_grid=ref)
+    metrics = [ # not currently using! 
+        'mean_temp',
+        'max_temp',
+        'total_posdeg',
+        'temp_diff',
+        'temp_diff_acq',
+        'total_precip',
+        'total_rain',
+        'total_snow',
+        'acq_day_precip',
+        'mean_wind',
+        'max_wind',
+        'hours_blowing_snow'
+    ]
+    aorc = get_aorc_layers(aoi=aoi, 
+                           date_pairs=date_pairs, 
+                           crs=crs, 
+                           ref_grid=ref)
     e = time.time()
     print(f"Got AORC: {list(aorc.keys())} in {e-s:.3f} seconds.")
 
@@ -357,6 +373,7 @@ def get_snow_layers(
     aoi, 
     crs,
     date_pairs,
+    metrics = 'all',
     ref_grid = None
 ):
     # print(aoi)
@@ -439,7 +456,7 @@ def get_snow_layers(
             continue
 
         ds_metrics = get_snow_metrics(ds_slice,
-                                      metrics=['swe_change', 'sd_change'])
+                                      metrics=metrics)
         pair_name = start_date.strftime('%y%m%d') + "_" + end_date.strftime('%y%m%d')
         ds_metrics['pair'] = pair_name
         ds_metrics = ds_metrics.set_coords('pair')
@@ -467,10 +484,10 @@ def get_snow_metrics(
     out = xr.Dataset()
 
     valid_metrics = [
-        'total_swe',
-        'max_swe',
-        'swe_change',
-        'sd_change'
+        'swe_accum',
+        'swe_ablate',
+        'density_change',
+        # 'snow_status_change'
     ]
 
     if metrics == 'all':
@@ -480,136 +497,54 @@ def get_snow_metrics(
             if metric not in valid_metrics:
                 raise ValueError(f"Invalid metric: {metric}. Valid metrics are: {valid_metrics}")
 
-    if 'total_swe' in metrics: 
-        out['total_swe'] = ds['SWE_Post'].sum(dim='time')
-    if 'max_swe' in metrics: 
-        out['max_swe'] = ds['SWE_Post'].max(dim='time')
-    if 'swe_change' in metrics: 
-        # first minus last 
-        out['swe_change'] = ds['SWE_Post'].isel(time=-1) - ds['SWE_Post'].isel(time=0)
-    if 'sd_change' in metrics: 
-        # first minus last 
-        out['sd_change'] = ds['SD_Post'].isel(time=-1) - ds['SD_Post'].isel(time=0)
-    # if 'snow_cover_change' in metrics: 
-    #     out['snow_cover_change'] = ds['SCA_Post']
+    # Calculate day-to-day changes
+    swe_diff = ds['SWE_Post'].diff(dim='time')
+    sd_diff = ds['SD_Post'].diff(dim='time')
+
+    if 'swe_accum' in metrics:
+        # Sum of only the positive daily SWE changes (new snow mass)
+        out['swe_accum'] = swe_diff.where(swe_diff > 0, other=0).sum(dim='time')
+        
+    if 'swe_ablate' in metrics:
+        # Sum of only the negative daily SWE changes (melt/sublimation mass)
+        # Note: Taking the absolute value makes it easier for the ML model to interpret
+        out['swe_ablate'] = abs(swe_diff.where(swe_diff < 0, other=0).sum(dim='time'))
+
+    if 'density_change' in metrics:
+        # Bulk Density = SWE / Snow Depth (handle division by zero where snow is absent)
+        # Assuming SWE is in meters and SD is in meters, this yields a ratio.
+        # If units differ (e.g., mm and meters), the ratio is still a valid ML feature.
+        
+        # Reference day density
+        dens_ref = ds['SWE_Post'].isel(time=0) / ds['SD_Post'].isel(time=0).where(ds['SD_Post'].isel(time=0) > 0)
+        
+        # Secondary day density
+        dens_sec = ds['SWE_Post'].isel(time=-1) / ds['SD_Post'].isel(time=-1).where(ds['SD_Post'].isel(time=-1) > 0)
+        
+        # Change in density over the 12 days. Fill NaNs with 0 (no snow = no density change)
+        out['density_change'] = (dens_sec - dens_ref).fillna(0)
+
+    if 'snow_status_change' in metrics:
+        # 1 if snow appeared, -1 if snow melted completely, 0 if no change in presence/absence
+        # Convert to boolean (has snow > 0), then cast to integer to subtract
+        has_snow_ref = (ds['SWE_Post'].isel(time=0) > 0).astype(int)
+        has_snow_sec = (ds['SWE_Post'].isel(time=-1) > 0).astype(int)
+        
+        out['snow_status_change'] = has_snow_sec - has_snow_ref
+
+    # if 'swe_change' in metrics: 
+    #     # first minus last 
+    #     out['swe_change'] = ds['SWE_Post'].isel(time=-1) - ds['SWE_Post'].isel(time=0)
+    # if 'sd_change' in metrics: 
+    #     # first minus last 
+    #     out['sd_change'] = ds['SD_Post'].isel(time=-1) - ds['SD_Post'].isel(time=0)
+    # # if 'snow_cover_change' in metrics: 
+    # #     out['snow_cover_change'] = ds['SCA_Post']
 
     return out
 
-import xarray as xr
+import re 
 import pandas as pd
-import re
-
-def process_ucla_granule_eager(file_obj, aoi_wgs84_bounds):
-    # Open the dataset lazily
-    ds = xr.open_dataset(file_obj, chunks={})
-    
-    # 1. Parse Water Year
-    filename = getattr(file_obj, 'path', str(file_obj))
-    match = re.search(r'WY(\d{4})_\d{2}', filename)
-    start_year = int(match.group(1)) if match else 2000
-    
-    # 2. Assign Time
-    num_days = ds.sizes['Day']
-    time_coords = pd.date_range(start=f"{start_year}-10-01", periods=num_days, freq='D')
-    
-    # 3. Handle Spatial Coordinates
-    ds = ds.rename({'Day': 'time', 'Latitude': 'y', 'Longitude': 'x'})
-    ds = ds.assign_coords(
-        time=time_coords,
-        y=ds.y.values.flatten(),
-        x=ds.x.values.flatten()
-    )
-    
-    # 4. Rough Slice
-    ds = ds.sortby(['x', 'y'])
-    minx, miny, maxx, maxy = aoi_wgs84_bounds
-    ds_slice = ds.sel(
-        x=slice(minx - 0.01, maxx + 0.01), 
-        y=slice(miny - 0.01, maxy + 0.01)
-    )
-    
-    # THE CRITICAL STEP: Download this tiny slice into RAM right now
-    # and return a pure, in-memory xarray dataset
-    return ds_slice.compute()
-
-def process_ucla_granule_optimized(ds, aoi_wgs84_bounds=None):
-    """
-    Revised to work as a 'preprocess' function for open_mfdataset.
-    """
-    # 1. Parse Water Year from the encoding (more reliable than filename regex in open_mfdataset)
-    # If filename is available, use it; otherwise, infer from global attributes
-    filename = ds.encoding.get('source', '')
-    match = re.search(r'WY(\d{4})_\d{2}', filename)
-    start_year = int(match.group(1)) if match else 2000 # fallback
-    
-    # 2. Assign Time
-    num_days = ds.sizes['Day']
-    time_coords = pd.date_range(start=f"{start_year}-10-01", periods=num_days, freq='D')
-    
-    # 3. Streamline Spatial Coordinates
-    # We rename first so we can use .sel() effectively
-    ds = ds.rename({'Day': 'time', 'Latitude': 'y', 'Longitude': 'x'})
-    
-    # Use standard 1D arrays for coords (only take the first column/row)
-    ds = ds.assign_coords(
-        time=time_coords,
-        y=ds.y.values.flatten(),
-        x=ds.x.values.flatten()
-    )
-
-    # 4. CRITICAL: Rough Spatial Slice
-    # This discards 99% of the data before it ever hits your loop
-    if aoi_wgs84_bounds is not None:
-        minx, miny, maxx, maxy = aoi_wgs84_bounds
-        ds = ds.sel(x=slice(minx, maxx), y=slice(maxy, miny))
-    
-    return ds
-
-# def get_snow_layers_optimized(aoi, crs, date_pairs, ref_grid=None):
-#     # 1. Setup Spatial Filter
-#     g = gpd.GeoSeries([aoi], crs=crs)
-#     aoi_wgs84_bounds = g.to_crs("EPSG:4326").total_bounds # [minx, miny, maxx, maxy]
-    
-#     years = get_years(date_pairs)
-    
-#     # ... [Search and Auth code remains the same] ...
-
-#     # 2. Parallel Opening with open_mfdataset
-#     # Using a lambda to pass the bounds into the preprocess function
-#     open_kwargs = dict(
-#         chunks={'Day': -1, 'Latitude': 100, 'Longitude': 100},
-#         preprocess=lambda d: process_ucla_granule_optimized(d, aoi_wgs84_bounds),
-#         parallel=True
-#     )
-    
-#     ds_swe = xr.open_mfdataset(swe_files, **open_kwargs).sortby('time')
-#     ds_sd = xr.open_mfdataset(sd_files, **open_kwargs).sortby('time')
-
-#     # 3. Combine and Slice Stats (Median)
-#     ds_full = xr.merge([ds_swe, ds_sd]).isel(Stats=2)
-#     ds_full = ds_full.rio.write_crs("EPSG:4326")
-    
-#     # Fine clip (accurate to the polygon)
-#     ds_clip = ds_full.rio.clip(g, crs=crs).compute() # Compute here to stop lazy-loading overhead
-    
-#     # 4. Metrics Loop (Now fast because data is small and in memory)
-#     ds_list = []
-#     for start_date, end_date in date_pairs:
-#         ds_slice = ds_clip.sel(time=slice(start_date, end_date))
-#         if ds_slice.sizes['time'] == 0:
-#             continue
-
-#         ds_metrics = get_snow_metrics(ds_slice, metrics=['swe_change', 'sd_change'])
-#         pair_name = f"{start_date:%y%m%d}_{end_date:%y%m%d}"
-#         ds_metrics = ds_metrics.assign_coords(pair=pair_name).set_coords('pair')
-#         ds_list.append(ds_metrics)
-
-#     ds_final = xr.concat(ds_list, dim='pair').sortby('pair')
-    
-#     if ref_grid is not None:
-#         ds_final = ds_final.rio.reproject_match(ref_grid)
-        
-#     return ds_final
 
 def process_ucla_granule(file_obj):
     # Open the dataset
@@ -654,7 +589,8 @@ def get_aorc_layers(
     aoi, 
     date_pairs, 
     crs,
-    ref_grid = None
+    ref_grid = None,
+    metrics = 'all'
 ) -> xr.Dataset: 
     """
     Get AORC layers for the given AOI and date pairs. Returns a dictionary of 
@@ -720,7 +656,7 @@ def get_aorc_layers(
             print(f'Could not get AORC data for {start_date} to {end_date}.')
             continue
 
-        ds_metrics = get_aorc_metrics(ds_slice)
+        ds_metrics = get_aorc_metrics(ds_slice, metrics=metrics)
         pair_name = start_date.strftime('%y%m%d') + "_" + end_date.strftime('%y%m%d')
         ds_metrics['pair'] = pair_name
         ds_metrics = ds_metrics.set_coords('pair')
@@ -767,7 +703,18 @@ def get_aorc_metrics(
     valid_metrics = [
         'mean_temp',
         'max_temp',
-        'total_precip'
+        'total_posdeg',
+        'temp_diff',
+        'temp_diff_acq',
+        'freeze_thaw_cycles',
+        'diurnal_temp_range',
+        'total_precip',
+        'total_rain',
+        'total_snow',
+        'acq_day_precip',
+        'mean_wind',
+        'max_wind',
+        'hours_blowing_snow'
     ]
 
     if metrics == 'all':
@@ -777,12 +724,68 @@ def get_aorc_metrics(
             if metric not in valid_metrics:
                 raise ValueError(f"Invalid metric: {metric}. Valid metrics are: {valid_metrics}")
     
+    # temperature metrics 
+    temp = aorc_ds['TMP_2maboveground'] - 273.15 # convert from K to C
     if 'mean_temp' in metrics: 
-        ds['mean_temp'] = aorc_ds['APCP_surface'].mean(dim='time')
+        ds['mean_temp'] = temp.mean(dim='time')
     if 'max_temp' in metrics: 
-        ds['max_temp'] = aorc_ds['APCP_surface'].max(dim='time')
-    if 'total_precip' in metrics: 
-        ds['total_precip'] = aorc_ds['APCP_surface'].sum(dim='time')
+        ds['max_temp'] = temp.max(dim='time')
+    if 'total_posdeg' in metrics: 
+        ds['total_posdeg'] = (
+        temp
+        .where(temp > 0, other=0)
+        .sum(dim='time')
+    )
+    if 'temp_diff' in metrics: 
+        ds['temp_diff'] = temp.isel(time=-1) - temp.isel(time=0)
+    if 'temp_diff_acq' in metrics:
+        # Absolute temperature difference between reference (time=0) and secondary (time=-1) acquisitions
+        ds['temp_diff_acq'] = abs(temp.isel(time=0) - temp.isel(time=-1))
+    if 'freeze_thaw_cycles' in metrics:
+        # Count how many times the temperature crosses the 0°C threshold
+        # We convert to boolean (True if > 0), then use .diff() to find where the boolean state changes
+        is_above_freezing = temp > 0
+        ds['freeze_thaw_cycles'] = (is_above_freezing.astype(int).diff(dim='time') != 0).sum(dim='time')
+        # filter out anything above 100 cycles
+        ds['freeze_thaw_cycles'] = ds['freeze_thaw_cycles'].where(ds['freeze_thaw_cycles'] <= 100, other=np.nan)
+        # filter out anything negative 
+        ds['freeze_thaw_cycles'] = ds['freeze_thaw_cycles'].where(ds['freeze_thaw_cycles'] >= 0, other=np.nan)
+    if 'diurnal_temp_range' in metrics:
+        # Resample to daily max and min, subtract to get daily range, then average over the 12 days
+        # (Assuming your time coordinate is recognized as datetime by xarray)
+        daily_max = temp.resample(time='1D').max()
+        daily_min = temp.resample(time='1D').min()
+        ds['diurnal_temp_range'] = (daily_max - daily_min).mean(dim='time')
+    
+    # precip metrics 
+    precip = aorc_ds['APCP_surface']
+    if 'total_precip' in metrics:
+        ds['total_precip'] = precip.sum(dim='time')
+    if 'total_rain' in metrics:
+        # Sum of precipitation only when temperature is above 0°C
+        # other=0 ensures we don't introduce NaNs that break the sum
+        ds['total_rain'] = precip.where(temp > 0, other=0).sum(dim='time')
+    if 'total_snow' in metrics:
+        # Sum of precipitation only when temperature is at or below 0°C
+        ds['total_snow'] = precip.where(temp <= 0, other=0).sum(dim='time')
+        
+    if 'acq_day_precip' in metrics:
+        # Sum of precipitation strictly on the reference acquisition day and secondary acquisition day
+        ds['acq_day_precip'] = precip.isel(time=0) + precip.isel(time=-1)
+
+    # wind metrics 
+    wind_speed = np.sqrt(aorc_ds['UGRD_10maboveground']**2 + aorc_ds['VGRD_10maboveground']**2)
+
+    if 'hours_blowing_snow' in metrics:
+        # Count the number of time steps (usually hours in AORC) where wind exceeds 6 m/s
+        # 6 m/s is a standard rule-of-thumb threshold for dry snow transport
+        ds['hours_blowing_snow'] = (wind_speed > 6.0).sum(dim='time')
+        # filter out negative and anything above 700 hours 
+        ds['hours_blowing_snow'] = ds['hours_blowing_snow'].where((ds['hours_blowing_snow'] >= 0) & (ds['hours_blowing_snow'] <= 700), other=np.nan)
+    if 'mean_wind' in metrics: 
+        ds['mean_wind'] = np.sqrt(aorc_ds['UGRD_10maboveground']**2 + aorc_ds['VGRD_10maboveground']**2).mean(dim='time')
+    if 'max_wind' in metrics: 
+        ds['max_wind'] = np.sqrt(aorc_ds['UGRD_10maboveground']**2 + aorc_ds['VGRD_10maboveground']**2).max(dim='time')
 
     return ds
 
