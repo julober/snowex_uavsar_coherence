@@ -1,0 +1,19 @@
+<VRTDataset rasterXSize="4791" rasterYSize="10519">
+  <Metadata domain="GEOLOCATION">
+    <MDI key="LINE_OFFSET">0</MDI>
+    <MDI key="LINE_STEP">1</MDI>
+    <MDI key="PIXEL_OFFSET">0</MDI>
+    <MDI key="PIXEL_STEP">1</MDI>
+    <MDI key="SRS">GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AXIS["Latitude",NORTH],AXIS["Longitude",EAST],AUTHORITY["EPSG","4326"]]</MDI>
+    <MDI key="X_BAND">1</MDI>
+    <MDI key="X_DATASET">/bsuhome/julialober/scratch/coherence_data/uavsar_geoslcs/fraser/23306/tmp/llh.long.vrt</MDI>
+    <MDI key="Y_BAND">1</MDI>
+    <MDI key="Y_DATASET">/bsuhome/julialober/scratch/coherence_data/uavsar_geoslcs/fraser/23306/tmp/llh.lat.vrt</MDI>
+  </Metadata>
+  <VRTRasterBand dataType="Float64" band="1">
+    <SimpleSource>
+      <SourceFilename relativeToVRT="0">/bsuhome/julialober/scratch/coherence_data/uavsar_geoslcs/fraser/23306/tmp/fraser_23306_01_BC_s1_2x8.lkv.y.vrt</SourceFilename>
+      <SourceBand>1</SourceBand>
+    </SimpleSource>
+  </VRTRasterBand>
+</VRTDataset>
