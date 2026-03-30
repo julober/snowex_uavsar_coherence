@@ -2,56 +2,86 @@ import xarray as xr
 import rioxarray as rxa
 import numpy as np
 from pathlib import Path
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, uniform_filter
 import math
 
-def calc_coherence_unweighted(slc1, slc2, window_size=(5, 5)):
+def calc_coherence_unweighted(
+    slc1, 
+    slc2, 
+    filter_type='uniform', 
+    window_size=(13, 13), 
+    sigma=2
+):
     """
-    Calculates unweighted SAR coherence by computing pixel-wise products first, 
-    then applying a spatial averaging window.
+    Calculates unweighted SAR coherence with an option for uniform or Gaussian filtering.
     
     Parameters:
     -----------
     slc1, slc2 : numpy.ndarray
         The two co-registered complex Single Look Complex (SLC) images.
+    filter_type : str
+        'uniform' for a boxcar average, or 'gaussian' for a Gaussian weighted average.
     window_size : int or tuple of ints
-        The size of the moving average window (looks_row, looks_col). 
+        The size of the moving average window for the uniform filter.
+    sigma : scalar or sequence of scalars
+        Standard deviation for the Gaussian kernel.
         
     Returns:
     --------
     coherence : numpy.ndarray
         The calculated coherence magnitude map (values ranging from 0 to 1).
     """
+    # --- 1. Input Parsing Helper ---
+    def _parse_input(data):
+        """Standardizes input into a 2D numpy array."""
+        if isinstance(data, (str, Path)):
+            # Load file, squeeze out any extra band dimensions, and grab numpy values
+            return rxa.open_rasterio(data).squeeze().values
+        elif isinstance(data, xr.DataArray):
+            # Extract numpy values and squeeze
+            return data.squeeze().values
+        elif isinstance(data, np.ndarray):
+            # Just ensure there are no dummy dimensions
+            return np.squeeze(data)
+        else:
+            raise TypeError(f"Unsupported input type: {type(data)}. Must be path, xarray, or numpy array.")
+
+    # Parse both inputs into raw 2D numpy arrays
+    arr1 = _parse_input(slc1)
+    arr2 = _parse_input(slc2)
+
+    # Sanity check to ensure images are perfectly co-registered / same size
+    if arr1.shape != arr2.shape:
+        raise ValueError(f"Shape mismatch: slc1 is {arr1.shape}, but slc2 is {arr2.shape}. Images must be the exact same dimensions.")
+    if filter_type not in ['uniform', 'gaussian']:
+        raise ValueError("filter_type must be either 'uniform' or 'gaussian'")
+
+    print (arr1.dtype, arr2.dtype)
+
+    # numerator
+    cross_product = arr1 * np.conj(arr2)
+    # denominator
+    int1 = np.abs(arr1)**2
+    int2 = np.abs(arr2)**2
     
-    # --- 1. The "Dot Product" (Pixel-by-pixel multiplication) ---
-    # Multiply slc1 by the complex conjugate of slc2
-    cross_product = slc1 * np.conj(slc2)
-    
-    # Calculate intensities (power) for both images
-    int1 = np.abs(slc1)**2
-    int2 = np.abs(slc2)**2
-    
-    # --- 2. Apply the Averaging Window (Multi-looking) ---
-    # gaussian_filter calculates the mean inside the moving window.
-    cross_avg_real = gaussian_filter(cross_product.real, size=window_size)
-    cross_avg_imag = gaussian_filter(cross_product.imag, size=window_size)
-    cross_avg = cross_avg_real + 1j * cross_avg_imag
-    
-    int1_avg = gaussian_filter(int1, size=window_size)
-    int2_avg = gaussian_filter(int2, size=window_size)
+    def apply_filter(data):
+        if filter_type == 'uniform':
+            return uniform_filter(data, size=window_size)
+        elif filter_type == 'gaussian':
+            return gaussian_filter(data, sigma=sigma)
+            
+    # moving average 
+    cross_avg = apply_filter(cross_product.real) + 1j * apply_filter(cross_product.imag)
+    int1_avg = apply_filter(int1)
+    int2_avg = apply_filter(int2)
     
     # --- 3. Compute Final Coherence ---
     # Coherence = |<S1 * S2*>| / sqrt(<|S1|^2> * <|S2|^2>)
-    
-    # Add a tiny epsilon to the denominator to prevent division-by-zero 
-    # in radar shadow regions where intensity drops to 0.
     epsilon = 1e-10 
     denominator = np.sqrt(int1_avg * int2_avg) + epsilon
-    
     coherence_mag = np.abs(cross_avg) / denominator
-    coherence_mag = np.clip(coherence_mag, 0.0, 1.0)
     
-    return coherence_mag
+    return np.clip(coherence_mag, 0.0, 1.0)
 
 def calc_coherence_matrix(coherences, 
                           num_scenes, 
