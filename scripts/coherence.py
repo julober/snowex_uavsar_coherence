@@ -1,40 +1,57 @@
-import numpy as np 
 import xarray as xr
-from scipy.signal import convolve2d 
+import rioxarray as rxa
+import numpy as np
+from pathlib import Path
+from scipy.ndimage import gaussian_filter
 import math
 
-# Calculate the coherence magnitude over 13x13 pixels 
-# img1 and img2 should be the same size
-def calc_coherence_unweighted(img1, img2, window=13) :
-
-    # create window over which to do the magnitude calculation 
-    kernel = np.ones((window, window), dtype=np.float32)
-    kernel /= kernel.sum()
-
-    if (type(img1) != xr.DataArray) or (type(img2) != xr.DataArray):
-        print("Input is not Xarray")
-
-    # Numerator: E[u1 * conj(u2)] a.k.a. the cross product of the two complex numbers
-    cross_prod = img1 * np.conj(img2.values)
-
-    # print(type(cross_prod))
-
-    # convolve2d does the leg work of moving the window over all pixels. 
-    # the 'symm' boundary creates a mirror reflection to fill in areas for pixels at the edges
-    num_real = convolve2d(cross_prod.real, kernel, mode='same', boundary='symm')
-    num_imag = convolve2d(cross_prod.imag, kernel, mode='same', boundary='symm')
-    # put the separate components back together 
-    numerator = num_real + 1j * num_imag
-
-    # Denominator: sqrt(E[|u1|^2] * E[|u2|^2])
-    power1 = convolve2d(np.abs(img1.values)**2, kernel, mode='same', boundary='symm')
-    power2 = convolve2d(np.abs(img2.values)**2, kernel, mode='same', boundary='symm')
-    denom = np.sqrt(power1 * power2)
-    denom[denom == 0] = 1e-12  # Prevent divide by zero
-
-    # Coherence magnitude
-    coherence = np.abs(numerator / denom)
-    return img1.copy(data=coherence)
+def calc_coherence_unweighted(slc1, slc2, window_size=(5, 5)):
+    """
+    Calculates unweighted SAR coherence by computing pixel-wise products first, 
+    then applying a spatial averaging window.
+    
+    Parameters:
+    -----------
+    slc1, slc2 : numpy.ndarray
+        The two co-registered complex Single Look Complex (SLC) images.
+    window_size : int or tuple of ints
+        The size of the moving average window (looks_row, looks_col). 
+        
+    Returns:
+    --------
+    coherence : numpy.ndarray
+        The calculated coherence magnitude map (values ranging from 0 to 1).
+    """
+    
+    # --- 1. The "Dot Product" (Pixel-by-pixel multiplication) ---
+    # Multiply slc1 by the complex conjugate of slc2
+    cross_product = slc1 * np.conj(slc2)
+    
+    # Calculate intensities (power) for both images
+    int1 = np.abs(slc1)**2
+    int2 = np.abs(slc2)**2
+    
+    # --- 2. Apply the Averaging Window (Multi-looking) ---
+    # gaussian_filter calculates the mean inside the moving window.
+    cross_avg_real = gaussian_filter(cross_product.real, size=window_size)
+    cross_avg_imag = gaussian_filter(cross_product.imag, size=window_size)
+    cross_avg = cross_avg_real + 1j * cross_avg_imag
+    
+    int1_avg = gaussian_filter(int1, size=window_size)
+    int2_avg = gaussian_filter(int2, size=window_size)
+    
+    # --- 3. Compute Final Coherence ---
+    # Coherence = |<S1 * S2*>| / sqrt(<|S1|^2> * <|S2|^2>)
+    
+    # Add a tiny epsilon to the denominator to prevent division-by-zero 
+    # in radar shadow regions where intensity drops to 0.
+    epsilon = 1e-10 
+    denominator = np.sqrt(int1_avg * int2_avg) + epsilon
+    
+    coherence_mag = np.abs(cross_avg) / denominator
+    coherence_mag = np.clip(coherence_mag, 0.0, 1.0)
+    
+    return coherence_mag
 
 def calc_coherence_matrix(coherences, 
                           num_scenes, 
