@@ -56,8 +56,6 @@ def calc_coherence_unweighted(
     if filter_type not in ['uniform', 'gaussian']:
         raise ValueError("filter_type must be either 'uniform' or 'gaussian'")
 
-    print (arr1.dtype, arr2.dtype)
-
     # numerator
     cross_product = arr1 * np.conj(arr2)
     # denominator
@@ -80,8 +78,18 @@ def calc_coherence_unweighted(
     epsilon = 1e-10 
     denominator = np.sqrt(int1_avg * int2_avg) + epsilon
     coherence_mag = np.abs(cross_avg) / denominator
+    coherence_mag = np.clip(coherence_mag, 0.0, 1.0)
+
+    fill_value = -9999 + -9999j
+    # print(arr1, arr2)
+    mask1 = np.isnan(arr1) | np.isclose(arr1, fill_value)
+    mask2 = np.isnan(arr2) | np.isclose(arr2, fill_value)
+    # print(mask1, mask2)
+    nan_mask = mask1 | mask2
     
-    return np.clip(coherence_mag, 0.0, 1.0)
+    coherence_mag[nan_mask] = np.nan
+    
+    return coherence_mag
 
 def calc_coherence_matrix(coherences, 
                           num_scenes, 
