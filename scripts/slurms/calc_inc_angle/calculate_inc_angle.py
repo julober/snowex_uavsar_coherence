@@ -64,7 +64,7 @@ def main():
             lkv_z_4326 = rxr.open_rasterio(z_file, masked=True).squeeze()
 
             # --- 2. Fetch the DEM using py3dep ---
-            logger.info("  -> Fetching DEM via py3dep...")
+            logger.info("  -> Fetching 10 m DEM via py3dep...")
             aoi_4326 = box(*lkv_x_4326.rio.bounds())
             dem_4326 = py3dep.get_dem(geometry=aoi_4326, resolution=10, crs="EPSG:4326") 
 
