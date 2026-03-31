@@ -976,7 +976,9 @@ def get_aorc_metrics(
     return ds
 
 
-def get_years(date_pairs: List[Tuple[date, date]]) -> Set[int]:
+def get_years(
+    date_pairs: List[Tuple[date, date]]
+) -> Set[int]:
     """
     Extract the unique set of calendar years covered by a list of date pairs.
 
