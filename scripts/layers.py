@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 import re
 import time
@@ -16,11 +17,64 @@ import rioxarray as rxa
 import s3fs
 import xarray as xr
 import xrspatial as xrs
+from pyproj import CRS as ProjCRS
 from shapely.geometry import Polygon
 
 from validation import validate_aoi, validate_date_pairs, make_reference_grid, validate_alignment
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# MODULE-LEVEL CONSTANTS
+# =============================================================================
+
+# ── Spatial / CRS ─────────────────────────────────────────────────────────────
+
+METRES_PER_DEGREE_AT_45_LAT: float = 111320.0 * math.cos(math.radians(45.0))
+"""Approximate metres per degree, computed at 45° latitude.
+
+Used to convert a metric resolution (metres) to arc-degrees when building a
+reference grid in a geographic CRS.  This is an approximation that is accurate
+for mid-latitude study areas (~30°–60° N/S) but will over- or under-estimate
+the degree resolution at polar or equatorial latitudes respectively.
+"""
+
+DEM_METRIC_CRS: str = 'EPSG:5070'
+"""Projected CRS (Conus Albers) used for accurate metric-based topographic derivatives."""
+
+TOPO_PAD_PIXELS: int = 1
+"""Number of pixels to pad the DEM edges before computing slope/aspect/curvature."""
+
+SPATIAL_CHUNK_SIZE: int = 25
+"""Chunk size (pixels) along x and y dimensions for Zarr output."""
+
+# ── Temperature ────────────────────────────────────────────────────────────────
+
+KELVIN_TO_CELSIUS_OFFSET: float = 273.15
+"""Offset to convert temperatures from Kelvin to Celsius (K − offset = °C)."""
+
+# ── Wind / precipitation thresholds ───────────────────────────────────────────
+
+BLOWING_SNOW_WIND_THRESHOLD_MS: float = 6.0
+"""Wind speed threshold (m s⁻¹) above which blowing snow is assumed to occur."""
+
+MAX_FREEZE_THAW_CYCLES: int = 100
+"""Upper clamp for the freeze–thaw cycle count per coherence interval."""
+
+MAX_HOURS_BLOWING_SNOW: int = 700
+"""Upper clamp for the hours-blowing-snow count per coherence interval (~29 days × 24 h)."""
+
+# ── Dataset-specific ──────────────────────────────────────────────────────────
+
+UCLA_POSTERIOR_STATS_INDEX: int = 2
+"""Index along the Stats dimension of UCLA WUS_UCLA_SR granules selecting the posterior mean."""
+
+SNOW_CLIMATOLOGY_FILENAME: str = 'SnowClass_NA_300m_10.0arcsec_2021_v01.0.nc'
+"""Expected filename for the NSIDC-0768 seasonal snow classification dataset."""
+
+AORC_S3_BASE_URL: str = 'noaa-nws-aorc-v1-1-1km'
+"""Public S3 bucket name for the NOAA AORC v1.1 1-km dataset."""
+
 
 def assemble_data(
     aoi: Polygon,
@@ -95,11 +149,16 @@ def assemble_data(
     logger.debug("AOI validated; %d date pairs provided", len(date_pairs))
 
     # 2. Create reference grid
-    if crs == 'EPSG:4326' and res == 30:
-        res_deg = 0.000381807117  # 30 m at 45 deg latitude
+    crs_obj = ProjCRS.from_user_input(crs)
+    if crs_obj.is_geographic:
+        # Convert the requested metric resolution to arc-degrees at ~45° latitude.
+        res_grid = res / METRES_PER_DEGREE_AT_45_LAT
+    else:
+        # Projected CRS: resolution is already in metres.
+        res_grid = float(res)
 
-    ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_deg)
-    logger.debug("Reference grid created with resolution %.9f deg", res_deg)
+    ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_grid)
+    logger.debug("Reference grid created with resolution %g (CRS units)", res_grid)
 
     # 3. Get UAVSAR coherence layers
     s = time.time()
@@ -128,7 +187,11 @@ def assemble_data(
 
     # 5. Get DEM
     s = time.time()
-    dem = py3dep.get_dem(geometry=aoi, resolution=res, crs=crs)
+    try:
+        dem = py3dep.get_dem(geometry=aoi, resolution=res, crs=crs)
+    except Exception as exc:
+        logger.error("py3dep.get_dem failed: %s", exc)
+        raise
     dem.rio.write_crs(crs)
     dem = dem.rio.reproject_match(ref)
     e = time.time()
@@ -178,9 +241,9 @@ def assemble_data(
     # Define a spatial-only chunking strategy.
     # Using -1 tells Dask to NOT chunk that dimension (keep it as one block).
     chunk_dict = {
-        'pair': -1,  # Keep the entire time series together
-        'y': 25,     # Chunk spatially
-        'x': 25,
+        'pair': -1,                  # Keep the entire time series together
+        'y': SPATIAL_CHUNK_SIZE,     # Chunk spatially
+        'x': SPATIAL_CHUNK_SIZE,
     }
 
     ds_chunked = ds.chunk(chunk_dict)
@@ -363,8 +426,8 @@ def get_uavsar_incidence(
 
         # Load the file; masked=True converts nodata/fill values to np.nan.
         da = rxa.open_rasterio(file_path, masked=True).squeeze()
-        g = gpd.GeoSeries([aoi], crs=crs).to_crs('EPSG:4326').total_bounds
-        minx, miny, maxx, maxy = g
+        # Derive bounds in the same CRS as the raster (assumed to match `crs`).
+        minx, miny, maxx, maxy = gpd.GeoSeries([aoi], crs=crs).total_bounds
         da = da.sel(x=slice(minx, maxx), y=slice(maxy, miny))
 
         # Write CRS before reprojecting.
@@ -421,7 +484,11 @@ def get_nlcd_layers(
 
     g = gpd.GeoSeries([aoi], crs=crs)
 
-    ds = gh.nlcd_bygeom(geometry=g, years=years)[0]
+    try:
+        ds = gh.nlcd_bygeom(geometry=g, years=years)[0]
+    except Exception as exc:
+        logger.error("Failed to fetch NLCD data from pygeohydro: %s", exc)
+        raise
 
     if ref_grid is not None:
         ds = ds.rio.reproject_match(ref_grid)
@@ -465,22 +532,29 @@ def get_snow_climatology(
     ValueError
         If the expected NetCDF file cannot be found under ``fp``.
     """
-    fname = '/SnowClass_NA_300m_10.0arcsec_2021_v01.0.nc'
+    fname = SNOW_CLIMATOLOGY_FILENAME
+    full_path = os.path.join(fp, fname)
 
-    if not os.path.exists(fp + fname):
+    if not os.path.exists(full_path):
         error_msg = (
-            f"Could not open file {fp + fname}. Please download {fname} "
+            f"Could not open file {full_path}. Please download {fname} "
             "from NSIDC at https://daacdata.apps.nsidc.org/pub/DATASETS/"
             "nsidc0768_global_seasonal_snow_classification_v01/."
         )
         raise ValueError(error_msg)
 
-    logger.debug("Loading snow climatology from %s", fp + fname)
+    logger.debug("Loading snow climatology from %s", full_path)
 
-    ds = xr.open_dataset(fp + fname, chunks={})
+    try:
+        ds = xr.open_dataset(full_path, chunks={})
+    except Exception as exc:
+        logger.error("Failed to open snow climatology file %s: %s", full_path, exc)
+        raise
     ds = ds.rename({'lat': 'y', 'lon': 'x', 'SnowClass': 'snow_class'})
     ds = ds.sortby(['x', 'y'])
 
+    # The climatology dataset is always in EPSG:4326; project the AOI bounds
+    # to 4326 for slicing, regardless of the input ``crs``.
     g = gpd.GeoSeries([aoi], crs=crs).to_crs('EPSG:4326').total_bounds
     minx, miny, maxx, maxy = g
     logger.debug(
@@ -529,13 +603,16 @@ def get_topo_layers(
 
     ds = xr.Dataset()
 
-    if dem.rio.crs == 'EPSG:4326':
-        dem_reproj = dem.rio.reproject('EPSG:5070')
+    # Reproject to a metric CRS for accurate gradient-based derivatives; any
+    # geographic (angular) CRS is unsuitable for slope/aspect computation.
+    dem_crs = ProjCRS.from_user_input(dem.rio.crs)
+    if dem_crs.is_geographic:
+        dem_reproj = dem.rio.reproject(DEM_METRIC_CRS)
     else:
         dem_reproj = dem
 
     # Pad the DEM with NaNs to extend values to the edge.
-    dem_nan_padded = dem_reproj.pad(y=1, x=1, constant_values=np.nan)
+    dem_nan_padded = dem_reproj.pad(y=TOPO_PAD_PIXELS, x=TOPO_PAD_PIXELS, constant_values=np.nan)
 
     # Use use_coordinate=False to bypass the monotonic-coordinate requirement.
     dem_extrapolated = dem_nan_padded.interpolate_na(
@@ -549,10 +626,10 @@ def get_topo_layers(
     aspect_extrap = xrs.aspect(dem_extrapolated)
     curve_extrap = xrs.curvature(dem_extrapolated)
 
-    # Trim the 1-pixel artificial boundary back to the original DEM extent.
-    ds['slope'] = slope_extrap.isel(y=slice(1, -1), x=slice(1, -1))
-    ds['aspect'] = aspect_extrap.isel(y=slice(1, -1), x=slice(1, -1))
-    ds['curve'] = curve_extrap.isel(y=slice(1, -1), x=slice(1, -1))
+    # Trim the padded boundary back to the original DEM extent.
+    ds['slope'] = slope_extrap.isel(y=slice(TOPO_PAD_PIXELS, -TOPO_PAD_PIXELS), x=slice(TOPO_PAD_PIXELS, -TOPO_PAD_PIXELS))
+    ds['aspect'] = aspect_extrap.isel(y=slice(TOPO_PAD_PIXELS, -TOPO_PAD_PIXELS), x=slice(TOPO_PAD_PIXELS, -TOPO_PAD_PIXELS))
+    ds['curve'] = curve_extrap.isel(y=slice(TOPO_PAD_PIXELS, -TOPO_PAD_PIXELS), x=slice(TOPO_PAD_PIXELS, -TOPO_PAD_PIXELS))
 
     if ref_grid is not None:
         ds = ds.rio.reproject_match(ref_grid)
@@ -602,31 +679,60 @@ def get_snow_layers(
     years = get_years(date_pairs)
     logger.debug("Searching WUS_UCLA_SR granules for years: %s", years)
 
-    grans = earthaccess.search_data(
-        short_name='WUS_UCLA_SR',
-        cloud_hosted=True,
-        temporal=(str(min(years)), str(max(years))),
-        polygon=list(zip(x, y)),
-    )
+    try:
+        grans = earthaccess.search_data(
+            short_name='WUS_UCLA_SR',
+            cloud_hosted=True,
+            temporal=(str(min(years)), str(max(years))),
+            polygon=list(zip(x, y)),
+        )
+    except Exception as exc:
+        logger.error("earthaccess.search_data failed for WUS_UCLA_SR: %s", exc)
+        raise
     logger.debug("Found %d WUS_UCLA_SR granules", len(grans))
 
     auth = earthaccess.login()
     if not auth.authenticated:
         auth.login(strategy="interactive", persist=True)
 
-    fileset = earthaccess.open(grans)
+    try:
+        fileset = earthaccess.open(grans)
+    except Exception as exc:
+        logger.error("earthaccess.open failed for WUS_UCLA_SR granules: %s", exc)
+        raise
 
     # Separate granules by type based on naming convention.
     swe_files = [f for f in fileset if "SWE_SCA_POST" in (f.path if hasattr(f, 'path') else str(f))]
     sd_files = [f for f in fileset if "SD_POST" in (f.path if hasattr(f, 'path') else str(f))]
 
-    # Process and concatenate each group along time.
-    ds_swe = xr.concat([process_ucla_granule(f) for f in swe_files], dim='time').sortby('time')
-    ds_sd = xr.concat([process_ucla_granule(f) for f in sd_files], dim='time').sortby('time')
+    # Process granules individually so that a single bad file does not abort
+    # the whole pipeline.
+    processed_swe: List[xr.Dataset] = []
+    for f in swe_files:
+        try:
+            processed_swe.append(process_ucla_granule(f))
+        except Exception as exc:
+            logger.warning("Skipping SWE granule %s due to error: %s", f, exc)
+
+    processed_sd: List[xr.Dataset] = []
+    for f in sd_files:
+        try:
+            processed_sd.append(process_ucla_granule(f))
+        except Exception as exc:
+            logger.warning("Skipping SD granule %s due to error: %s", f, exc)
+
+    if not processed_swe or not processed_sd:
+        raise RuntimeError(
+            "No UCLA WUS_UCLA_SR granules could be processed. "
+            "Check authentication and data availability."
+        )
+
+    ds_swe = xr.concat(processed_swe, dim='time').sortby('time')
+    ds_sd = xr.concat(processed_sd, dim='time').sortby('time')
 
     # Merge SWE and SD into one data cube.
     ds_full = xr.merge([ds_swe, ds_sd], compat='override')
-    ds_full = ds_full.isel(Stats=2)
+    ds_full = ds_full.isel(Stats=UCLA_POSTERIOR_STATS_INDEX)
     ds_full = ds_full.rio.write_crs("EPSG:4326")
 
     ds_clip = ds_full.rio.clip(g, crs=crs)
@@ -751,12 +857,28 @@ def process_ucla_granule(file_obj) -> xr.Dataset:
     -------
     xr.Dataset
         Dataset with a ``time`` dimension and ``y``/``x`` spatial coordinates.
+
+    Raises
+    ------
+    OSError
+        If the granule file cannot be opened.
+    ValueError
+        If the Water Year cannot be parsed from the filename.
     """
-    ds = xr.open_dataset(file_obj, chunks={})
+    filename = file_obj.path if hasattr(file_obj, 'path') else str(file_obj)
+
+    try:
+        ds = xr.open_dataset(file_obj, chunks={})
+    except Exception as exc:
+        logger.error("Failed to open UCLA granule %s: %s", filename, exc)
+        raise
 
     # Parse the Water Year (WY) from the filename for the time axis.
-    filename = file_obj.path if hasattr(file_obj, 'path') else str(file_obj)
     match = re.search(r'WY(\d{4})_\d{2}', filename)
+    if match is None:
+        raise ValueError(
+            f"Could not parse Water Year from UCLA granule filename: {filename}"
+        )
     start_year = int(match.group(1))
     logger.debug("Processing UCLA granule for WY%d: %s", start_year, filename)
 
@@ -814,18 +936,23 @@ def get_aorc_layers(
     xr.Dataset
         Dataset of AORC metrics indexed by a ``pair`` coordinate.
     """
-    base_url = 's3://noaa-nws-aorc-v1-1-1km'
-
     years = get_years(date_pairs)
     g = gpd.GeoSeries([aoi], crs=crs)
     logger.debug("Opening AORC zarr stores for years: %s", years)
 
     s3_out = s3fs.S3FileSystem(anon=True)
     fileset = [
-        s3fs.S3Map(root=f"s3://{base_url}/{yr}.zarr", s3=s3_out, check=False)
+        s3fs.S3Map(root=f"s3://{AORC_S3_BASE_URL}/{yr}.zarr", s3=s3_out, check=False)
         for yr in years
     ]
-    ds_full = xr.open_mfdataset(fileset, engine='zarr')
+    try:
+        ds_full = xr.open_mfdataset(fileset, engine='zarr')
+    except Exception as exc:
+        logger.error(
+            "Failed to open AORC zarr store(s) from s3://%s: %s",
+            AORC_S3_BASE_URL, exc,
+        )
+        raise
 
     # Clip to the AOI and rename spatial dimensions.
     ds_clip = ds_full.rio.clip(g.geometry.values, crs=crs)
@@ -911,7 +1038,7 @@ def get_aorc_metrics(
                 raise ValueError(f"Invalid metric: {metric}. Valid metrics are: {valid_metrics}")
 
     # Temperature metrics.
-    temp = aorc_ds['TMP_2maboveground'] - 273.15  # convert from K to °C
+    temp = aorc_ds['TMP_2maboveground'] - KELVIN_TO_CELSIUS_OFFSET  # convert from K to °C
     if 'mean_temp' in metrics:
         ds['mean_temp'] = temp.mean(dim='time')
     if 'max_temp' in metrics:
@@ -932,8 +1059,12 @@ def get_aorc_metrics(
         is_above_freezing = temp > 0
         ds['freeze_thaw_cycles'] = (is_above_freezing.astype(int).diff(dim='time') != 0).sum(dim='time')
         # Clamp to physically plausible range.
-        ds['freeze_thaw_cycles'] = ds['freeze_thaw_cycles'].where(ds['freeze_thaw_cycles'] <= 100, other=np.nan)
-        ds['freeze_thaw_cycles'] = ds['freeze_thaw_cycles'].where(ds['freeze_thaw_cycles'] >= 0, other=np.nan)
+        ds['freeze_thaw_cycles'] = ds['freeze_thaw_cycles'].where(
+            ds['freeze_thaw_cycles'] <= MAX_FREEZE_THAW_CYCLES, other=np.nan
+        )
+        ds['freeze_thaw_cycles'] = ds['freeze_thaw_cycles'].where(
+            ds['freeze_thaw_cycles'] >= 0, other=np.nan
+        )
     if 'diurnal_temp_range' in metrics:
         # Average daily temperature range over the interval.
         daily_max = temp.resample(time='1D').max()
@@ -958,11 +1089,12 @@ def get_aorc_metrics(
     wind_speed = np.sqrt(aorc_ds['UGRD_10maboveground']**2 + aorc_ds['VGRD_10maboveground']**2)
 
     if 'hours_blowing_snow' in metrics:
-        # Count hourly time steps with wind speed > 6 m/s (blowing-snow threshold).
-        ds['hours_blowing_snow'] = (wind_speed > 6.0).sum(dim='time')
+        # Count hourly time steps exceeding the blowing-snow wind threshold.
+        ds['hours_blowing_snow'] = (wind_speed > BLOWING_SNOW_WIND_THRESHOLD_MS).sum(dim='time')
         # Clamp to physically plausible range.
         ds['hours_blowing_snow'] = ds['hours_blowing_snow'].where(
-            (ds['hours_blowing_snow'] >= 0) & (ds['hours_blowing_snow'] <= 700), other=np.nan
+            (ds['hours_blowing_snow'] >= 0) & (ds['hours_blowing_snow'] <= MAX_HOURS_BLOWING_SNOW),
+            other=np.nan,
         )
     if 'mean_wind' in metrics:
         ds['mean_wind'] = np.sqrt(
