@@ -5,7 +5,7 @@ from pathlib import Path
 from scipy.ndimage import gaussian_filter, uniform_filter
 import math
 
-def calc_coherence_unweighted(
+def calc_coherence(
     slc1, 
     slc2, 
     filter_type='uniform', 
