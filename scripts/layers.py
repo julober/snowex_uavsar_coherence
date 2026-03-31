@@ -5,9 +5,10 @@ import py3dep
 
 import numpy as np
 import xarray as xr
-import rioxarray 
+import rioxarray as rxa
 import os
 import time
+from pathlib import Path
 
 # i don't think this will work - figure it out
 from validation import validate_aoi, validate_date_pairs, make_reference_grid, validate_alignment
@@ -16,8 +17,10 @@ from validation import validate_aoi, validate_date_pairs, make_reference_grid, v
 def assemble_data(
     aoi, 
     date_pairs, 
+    flight_ids,
     fp_dest,
-    fp_coherence = '../data/coherence/',
+    fp_coh = '../data/coherence/',
+    fp_inc = '../data/inc_angle/',
     fp_snowclimate = '../data/NSIDC-0768/',
     crs = 'EPSG:4326', 
     res = 30,
@@ -52,24 +55,33 @@ def assemble_data(
 
     # 2. Create reference grid 
     if crs == 'EPSG:4326' and res == 30:
-        res_deg = 0.00381807117 # 30 m at 45 deg latitude 
+        res_deg = 0.000381807117 # 30 m at 45 deg latitude 
+    
     # 
     ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_deg)
 
     # 2. Get UAVSAR coherence layers
+    s = time.time()
     coh = get_uavsar_coherence(aoi=aoi, 
                                date_pairs=date_pairs, 
+                               flight_ids=flight_ids, # Pass new parameter
                                crs=crs, 
                                ref_grid=ref, 
-                               fp=fp_coherence)
+                               fp=fp_coh)
+    e = time.time()
+    print(f"Loaded coherence for flights {flight_ids} in {e-s:.3f} seconds.")
     # print(coh)
     # print(coh['pair'].values)
 
-    # 3. Get NLCD layers 
+    # Get Incidence angle
     s = time.time()
-    nlcd = get_nlcd_layers(aoi=aoi, crs=crs, ref_grid=ref)
+    # Assuming you wrap our incidence math into a helper like this:
+    incidence = get_uavsar_incidence(aoi=aoi,
+                                     flight_ids=flight_ids,
+                                     fp_inc=fp_inc,
+                                     ref_grid=ref)
     e = time.time()
-    print(f"Got NLCD {list(nlcd.keys())} in {e-s:.3f} seconds.")
+    print(f"Loaded incidence angles for flights {flight_ids} in {e-s:.3f} seconds.")
 
     # 4. Get DEM 
     # print(f'Making call to py3dep.get_map with resolution {resolution} in m.')
@@ -84,6 +96,12 @@ def assemble_data(
     topo = get_topo_layers(dem=dem, ref_grid=ref)
     e = time.time()
     print(f'Got topo layers: {list(topo.keys())} in {e-s:.3f} seconds.')
+
+    # 3. Get NLCD layers 
+    s = time.time()
+    nlcd = get_nlcd_layers(aoi=aoi, crs=crs, ref_grid=ref)
+    e = time.time()
+    print(f"Got NLCD {list(nlcd.keys())} in {e-s:.3f} seconds.")
 
     s = time.time()
     snow_class = get_snow_climatology(aoi=aoi, crs=crs, fp=fp_snowclimate, ref_grid=ref)
@@ -120,7 +138,7 @@ def assemble_data(
     e = time.time()
     print(f"Got SWE layers: {list(snow.keys())} in {e-s:.3f} seconds.")
 
-    ds_list = [coh, nlcd, dem, topo, snow_class, snow, aorc]
+    ds_list = [coh, incidence, dem, topo, nlcd, snow_class, snow, aorc]
     # ds_list = [nlcd, dem, topo, snow_class, snow]
     validate_alignment(ds_list)
 
@@ -161,52 +179,191 @@ def assemble_data(
     return ds
     
 
+# def get_uavsar_coherence(
+#     aoi, 
+#     date_pairs, 
+#     crs,
+#     fp,
+#     ref_grid = None,
+# ) -> xr.Dataset: 
+
+#     # find files
+#     files = os.listdir(fp)
+#     # filter files by date pairs
+#     fname_pairs = {}
+#     for f in files:
+#         # print(f)
+#         for start_date, end_date in date_pairs:
+#             sd_str = start_date.strftime('%y%m%d')
+#             ed_str = end_date.strftime('%y%m%d')
+#             if sd_str in f and ed_str in f:
+#                 # print(f'Found file {f} for pair: {sd_str}_{ed_str}')
+#                 fname_pairs[f'{sd_str}_{ed_str}'] = f
+    
+#     # open files as xarray dataset with pair dimension
+#     ds_list = []
+#     for k, f in fname_pairs.items():
+#         ds = xr.open_dataset(fp + f, chunks={})
+#         ds.rio.write_crs(crs, inplace=True)
+#         ds = ds.rename({list(ds.data_vars.keys())[0]: 'coherence'})
+#         ds['pair'] = k
+#         ds = ds.set_coords('pair')
+#         ds_list.append(ds)
+
+#     ds = xr.concat(ds_list, dim='pair')
+#     ds = ds.sortby('pair')
+
+#     # check that geometry is a GeoDataFrame and has a CRS 
+#     # if not isinstance(aoi, gpd.GeoDataFrame):
+#     #     raise ValueError("Input geometry must be a GeoDataFrame.")
+#     # if aoi.crs != 'EPSG:4326':
+#     #     raise ValueError("Input geometry must be in EPSG:4326 (WGS84).")
+    
+    
+
+#     if ref_grid is not None : 
+#         ds = ds.rio.reproject_match(ref_grid)
+
+#     return ds
+
 def get_uavsar_coherence(
     aoi, 
     date_pairs, 
-    crs,
-    fp,
-    ref_grid = None,
-) -> xr.Dataset: 
+    flight_ids, 
+    crs, 
+    ref_grid, 
+    fp='../data/coherence/'
+) -> xr.Dataset:
+    """
+    Loads UAVSAR coherence files from flight-specific directories, aligns them to 
+    a reference grid, and concatenates them into a 4D cube (flight_id, pair, y, x).
+    
+    Expected file structure:
+    fp / {flight_id} / *{flight_id}*{date1}*{date2}*.coh.tif
+    """
+    
+    fp = Path(fp)
+    flight_arrays = []
 
-    # find files
-    files = os.listdir(fp)
-    # filter files by date pairs
-    fname_pairs = {}
-    for f in files:
-        # print(f)
+    for fid in flight_ids:
+        pair_arrays = []
+        flight_dir = fp / str(fid)
+        
+        # Ensure the directory actually exists before searching it
+        if not flight_dir.exists():
+            raise FileNotFoundError(f"Flight directory not found: {flight_dir}")
+
         for start_date, end_date in date_pairs:
-            sd_str = start_date.strftime('%y%m%d')
-            ed_str = end_date.strftime('%y%m%d')
-            if sd_str in f and ed_str in f:
-                # print(f'Found file {f} for pair: {sd_str}_{ed_str}')
-                fname_pairs[f'{sd_str}_{ed_str}'] = f
+            # Format dates to match standard UAVSAR YYMMDD naming convention
+            date_str1 = start_date.strftime('%y%m%d')
+            date_str2 = end_date.strftime('%y%m%d')
+            
+            # Create a pair coordinate name for the xarray dataset (e.g., '210210_210224')
+            pair_name = f"{date_str1}_{date_str2}"
+            
+            # Search for the exact file using glob wildcards
+            search_pattern = f"*{fid}*{date_str1}*{date_str2}*coh*"
+            found_files = list(flight_dir.glob(search_pattern))
+            
+            if not found_files:
+                raise FileNotFoundError(f"Could not find coherence file for flight {fid} and dates {pair_name} in {flight_dir}")
+            
+            # Assuming there is only one match, grab the first one
+            file_path = found_files[0]
+            
+            # Load the raster, mask the nodata values (-9999 to NaN), and drop the dummy band dimension
+            da = xr.open_dataset(file_path, chunks={})
+            da.rio.write_crs(crs, inplace=True)
+            da = da.rename({list(da.data_vars.keys())[0]: 'coherence'})
+            
+            # Align perfectly with the master reference grid
+            da_matched = da.rio.reproject_match(ref_grid)
+            # da_matched.name = 'coherence'
+            
+            pair_arrays.append(da_matched)
+            
+        # 1. Concatenate all date pairs for this specific flight
+        pair_coord = xr.DataArray(
+            [f"{s.strftime('%y%m%d')}_{e.strftime('%y%m%d')}" for s, e in date_pairs], 
+            dims=['pair'], 
+            name='pair'
+        )
+        flight_da = xr.concat(pair_arrays, dim=pair_coord)
+        flight_arrays.append(flight_da)
+
+    # 2. Concatenate all flights into the final 4D array
+    flight_coord = xr.DataArray(flight_ids, dims=['flight_id'], name='flight_id')
+    coherence_da = xr.concat(flight_arrays, dim=flight_coord)
     
-    # open files as xarray dataset with pair dimension
-    ds_list = []
-    for k, f in fname_pairs.items():
-        ds = xr.open_dataset(fp + f, chunks={})
-        ds.rio.write_crs(crs, inplace=True)
-        ds = ds.rename({list(ds.data_vars.keys())[0]: 'coherence'})
-        ds['pair'] = k
-        ds = ds.set_coords('pair')
-        ds_list.append(ds)
+    return coherence_da
 
-    ds = xr.concat(ds_list, dim='pair')
-    ds = ds.sortby('pair')
 
-    # check that geometry is a GeoDataFrame and has a CRS 
-    # if not isinstance(aoi, gpd.GeoDataFrame):
-    #     raise ValueError("Input geometry must be a GeoDataFrame.")
-    # if aoi.crs != 'EPSG:4326':
-    #     raise ValueError("Input geometry must be in EPSG:4326 (WGS84).")
+def get_uavsar_incidence(
+    aoi,
+    flight_ids, 
+    fp_inc, 
+    ref_grid, 
+    crs='EPSG:4326'
+) -> xr.Dataset:
+    """
+    Loads pre-calculated UAVSAR incidence angle files, aligns them to a 
+    reference grid, and concatenates them along a 'flight_id' dimension.
     
+    Parameters:
+    -----------
+    flight_ids : list of str
+        List of the flight headings/IDs (e.g., ['08508', '26505']).
+    fp_inc : str or pathlib.Path
+        Directory containing the pre-calculated incidence angle files.
+    ref_grid : xarray.DataArray or xarray.Dataset
+        The reference grid to align the spatial dimensions (y, x) to.
+    crs : str
+        The target Coordinate Reference System.
+        
+    Returns:
+    --------
+    incidence_da : xarray.DataArray
+        A 3D DataArray with dimensions (flight_id, y, x).
+    """
+    fp_inc = Path(fp_inc)
+    inc_arrays = []
     
-
-    if ref_grid is not None : 
-        ds = ds.rio.reproject_match(ref_grid)
-
-    return ds
+    for fid in flight_ids:
+        # Assuming something like: "incidence_08508.tif"
+        search_pattern = f"*{fid}*s2.inc.tif"
+        found_files = list(fp_inc.glob(search_pattern))
+        # file_path = fp_inc / f"{fid}.inc.tif"
+        file_path = found_files[0]
+        
+        if not file_path.exists():
+            raise FileNotFoundError(f"Could not find pre-calculated incidence file: {file_path}")
+            
+        # 1. Load the file and drop the dummy 'band' dimension
+        # masked=True automatically converts raster nodata/fill values into np.nan
+        da = rxa.open_rasterio(file_path, masked=True).squeeze()
+        g = gpd.GeoSeries([aoi], crs=crs).to_crs('EPSG:4326').total_bounds
+        minx, miny, maxx, maxy = g
+        # # print(f"Clipping snow climatology to AOI bounds: {minx}, {miny}, {maxx}, {maxy}")
+        # # print(ds)
+        # print(minx, miny, maxx, maxy)
+        da = da.sel(x=slice(minx, maxx), y=slice(maxy, miny))
+        
+        # 2. Ensure it knows its CRS before reprojecting
+        da.rio.write_crs(crs, inplace=True)
+        
+        # 3. Align perfectly with the rest of your data cube
+        da_matched = da.rio.reproject_match(ref_grid)
+        
+        # 4. Clean up the metadata name so it merges nicely later
+        da_matched.name = 'incidence_angle'
+        
+        inc_arrays.append(da_matched)
+        
+    # 5. Concatenate into a single DataArray with the 'flight_id' dimension
+    flight_coord = xr.DataArray(flight_ids, dims=['flight_id'], name='flight_id')
+    incidence_da = xr.concat(inc_arrays, dim=flight_coord)
+    
+    return incidence_da
 
 
 # =============================================================================
