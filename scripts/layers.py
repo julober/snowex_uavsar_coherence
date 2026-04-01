@@ -18,7 +18,9 @@ import s3fs
 import xarray as xr
 import xrspatial as xrs
 from pyproj import CRS as ProjCRS
+from pyproj import Transformer
 from shapely.geometry import Polygon
+from shapely.ops import transform
 
 from validation import validate_aoi, validate_date_pairs, make_reference_grid, validate_alignment
 
@@ -153,11 +155,20 @@ def assemble_data(
     if crs_obj.is_geographic:
         # Convert the requested metric resolution to arc-degrees at ~45° latitude.
         res_grid = res / METRES_PER_DEGREE_AT_45_LAT
+        ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_grid)
     else:
         # Projected CRS: resolution is already in metres.
+        wgs84 = ProjCRS('EPSG:4326')
         res_grid = float(res)
+        ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_grid)
+        aoi_proj = aoi 
 
-    ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_grid)
+        # get aoi in WGS84 for APIs
+        project = Transformer.from_crs(crs_obj, wgs84, always_xy=True).transform
+        aoi = transform(project, aoi_proj)
+        crs = 'EPSG:4326'
+
+    # ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_grid)
     logger.debug("Reference grid created with resolution %g (CRS units)", res_grid)
 
     # 3. Get UAVSAR coherence layers
