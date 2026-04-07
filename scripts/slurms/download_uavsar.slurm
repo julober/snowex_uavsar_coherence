@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -J download_uavsar # job name
-#SBATCH -o /bsuhome/julialober/logs/%x-%j.log # output and error file name (%j expands to jobID)
+#SBATCH -o /bsuhome/julialober/logs/%x-%A_%a.log # output and error file name (%j expands to jobID)
 #SBATCH -n 1 # total number of tasks requested
 #SBATCH -N 1 # number of nodes you want to run on
 #SBATCH -p bsudfq # queue (partition)
