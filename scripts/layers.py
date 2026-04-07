@@ -367,15 +367,15 @@ def _read_uavsar_annotations(fp_ann: str, flight_ids: List[str]) -> Dict[str, st
         logger.debug("Reading annotation file: %s", ann_path)
 
         try:
-            raw = read_annotation(ann_path)
+            ann_raw = read_annotation(ann_path)
         except Exception as exc:
             logger.warning("Failed to read annotation file %s: %s", ann_path, exc)
             continue
 
-        ann_df = pd.DataFrame(raw).T
+        ann_df = pd.DataFrame(ann_raw).T
         for field in _WANTED_FIELDS:
             if field in ann_df.index:
-                safe_key = f"uavsar_{fid}_" + field.replace(' ', '_')
+                safe_key = f"uavsar_{fid}_{field.replace(' ', '_')}"
                 attrs[safe_key] = str(ann_df.loc[field, 'value'])
 
     return attrs
@@ -497,17 +497,19 @@ def get_uavsar_coherence(
     # Build datetime64 arrays directly from the date_pairs objects so that
     # downstream code can use sel/groupby on real timestamps instead of
     # parsing the YYMMDD string label.
-    time_1_values = np.array(
-        [np.datetime64(s.strftime('%Y-%m-%d'), 'ns') for s, _e in date_pairs],
-        dtype='datetime64[ns]',
+    time_1_values, time_2_values, delta_t_values = zip(
+        *[
+            (
+                np.datetime64(s.strftime('%Y-%m-%d'), 'ns'),
+                np.datetime64(e.strftime('%Y-%m-%d'), 'ns'),
+                (e - s).days,
+            )
+            for s, e in date_pairs
+        ]
     )
-    time_2_values = np.array(
-        [np.datetime64(e.strftime('%Y-%m-%d'), 'ns') for _s, e in date_pairs],
-        dtype='datetime64[ns]',
-    )
-    delta_t_values = np.array(
-        [(e - s).days for s, e in date_pairs], dtype=np.int64
-    )
+    time_1_values = np.array(time_1_values, dtype='datetime64[ns]')
+    time_2_values = np.array(time_2_values, dtype='datetime64[ns]')
+    delta_t_values = np.array(delta_t_values, dtype=np.int64)
 
     coherence_da = coherence_da.assign_coords(
         time_1=xr.DataArray(
