@@ -22,17 +22,19 @@ def main():
 
     # 1. Get the dictionary of all files for this campaign
     # Format returned: {'lowman_05208': ['url1', 'url2'], ...}
-    if campaign == "lowman": 
+    if True: 
         links_dict = get_uavsar_slcs(flight_name=campaign,
                 getann=True,
                 getllh=True,
-                getlkv=True)
+                getlkv=True,
+                pol=['HH', 'HV', 'VH', 'VV'])
                 #tag=['BU','BC'])
     else: 
         links_dict = get_uavsar_slcs(flight_name=campaign,
                 getann=True,
                 getllh=True,
-                getlkv=True)
+                getlkv=True,
+                pol=['HH', 'HV', 'VH', 'VV'])
 
     if not links_dict:
         print(f"No files found for campaign: {campaign}")

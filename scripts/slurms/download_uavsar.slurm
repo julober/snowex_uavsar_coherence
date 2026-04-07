@@ -7,7 +7,7 @@
 #SBATCH -t 12:00:00 # run time (hh:mm:ss) - 1 minute in this example.
 #SBATCH --mail-user=julialober@u.boisestate.edu
 #SBATCH --mail-type=END
-#SBATCH --array=1-6
+#SBATCH --array=1-13
 
 echo "Starting."
 
@@ -19,8 +19,8 @@ echo "Making log dir..."
 # 2. Make sure our log directory exists
 mkdir -p /bsuhome/julialober/logs
 
-# 3. Read the Nth line from campaigns.txt (where N is the Slurm Array Task ID)
-CAMPAIGN_FILE="download_uavsar/campaigns_retry.txt"
+# 3. Read the Nth li:ne from campaigns.txt (where N is the Slurm Array Task ID)
+CAMPAIGN_FILE="campaigns.txt"
 CAMPAIGN=$(sed -n "${SLURM_ARRAY_TASK_ID}p" $CAMPAIGN_FILE)
 
 # 4. Execute the Python script for that specific campaign
