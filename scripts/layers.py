@@ -86,6 +86,7 @@ def assemble_data(
     fp_coh: str = '../data/coherence/',
     fp_inc: str = '../data/inc_angle/',
     fp_snowclimate: str = '../data/NSIDC-0768/',
+    fp_ann: Optional[str] = None,
     crs: str = 'EPSG:4326',
     res: int = 30,
     overwrite: bool = False,
@@ -127,6 +128,11 @@ def assemble_data(
         Directory containing pre-calculated incidence angle ``.tif`` files.
     fp_snowclimate:
         Directory containing the NSIDC-0768 snow-climatology NetCDF file.
+    fp_ann:
+        Optional directory containing UAVSAR ``.ann`` annotation files.  When
+        provided, key flight metadata (e.g. start time, average yaw/pitch) are
+        read and stored as global attributes in the output Zarr store to
+        improve provenance tracking and CF/ACDD compliance.
     crs:
         Coordinate reference system string (default ``'EPSG:4326'``).
     res:
@@ -243,6 +249,42 @@ def assemble_data(
     ds = xr.merge(ds_list, join='exact', compat='minimal')
     logger.info("Merged %d layers into a single dataset", len(ds_list))
 
+    # ── CF-1.8 / ACDD-1.3 global attributes ────────────────────────────────
+    bounds = aoi.bounds  # (minx, miny, maxx, maxy) in the output CRS
+    ds.attrs.update({
+        'Conventions': 'CF-1.8, ACDD-1.3',
+        'title': 'UAVSAR Coherence Data Cube',
+        'summary': (
+            'Multi-temporal InSAR coherence and co-registered environmental '
+            'co-variables derived from NASA UAVSAR Level-2 products.'
+        ),
+        'source': 'UAVSAR Level-2 coherence products (NASA/JPL)',
+        'date_created': pd.Timestamp.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'geospatial_lat_min': float(bounds[1]),
+        'geospatial_lat_max': float(bounds[3]),
+        'geospatial_lon_min': float(bounds[0]),
+        'geospatial_lon_max': float(bounds[2]),
+        'geospatial_bounds_crs': 'EPSG:4326',
+        'flight_ids': ', '.join(str(f) for f in flight_ids),
+    })
+
+    # ── Per-variable units (CF requirement) ────────────────────────────────
+    if 'coherence' in ds:
+        ds['coherence'].attrs.setdefault('units', '1')
+        ds['coherence'].attrs.setdefault('long_name', 'InSAR coherence magnitude')
+        ds['coherence'].attrs.setdefault('valid_range', [0.0, 1.0])
+    if 'incidence_angle' in ds:
+        ds['incidence_angle'].attrs.setdefault('units', 'degree')
+        ds['incidence_angle'].attrs.setdefault('long_name', 'local incidence angle')
+
+    # ── Optional UAVSAR annotation metadata ─────────────────────────────────
+    if fp_ann is not None:
+        ann_attrs = _read_uavsar_annotations(fp_ann=fp_ann, flight_ids=flight_ids)
+        ds.attrs.update(ann_attrs)
+
+    # ── Write CRS so spatial metadata is preserved in the Zarr store ────────
+    ds = ds.rio.write_crs('EPSG:4326')
+
     # Clear original chunking metadata so to_zarr() does not try to reuse
     # stale chunk information and crash.
     for var in ds.variables:
@@ -267,6 +309,76 @@ def assemble_data(
         logger.info("Dataset written to %s", fp_dest)
     
     return ds
+
+
+def _read_uavsar_annotations(fp_ann: str, flight_ids: List[str]) -> Dict[str, str]:
+    """
+    Read UAVSAR annotation files and return a flat dict of provenance attributes.
+
+    One ``.ann`` file is processed per flight ID (the first match under
+    ``fp_ann``).  The returned dict is suitable for merging directly into
+    ``ds.attrs`` and therefore into ``.zattrs`` of the root Zarr group.
+
+    Parameters
+    ----------
+    fp_ann:
+        Directory that contains UAVSAR ``.ann`` annotation files.
+    flight_ids:
+        List of UAVSAR flight-heading identifiers whose annotation files
+        should be parsed.
+
+    Returns
+    -------
+    Dict[str, str]
+        Flat mapping of ``uavsar_{flight_id}_{key}`` → value strings.
+        Empty dict if ``uavsar_pytools`` is not installed or no files are
+        found.
+    """
+    try:
+        from uavsar_pytools.convert.tiff_conversion import read_annotation
+    except ImportError:
+        logger.warning(
+            "uavsar_pytools is not installed; annotation metadata will be skipped."
+        )
+        return {}
+
+    # Fields to extract from each annotation file (subset relevant for CF/ACDD).
+    _WANTED_FIELDS = [
+        'start time of acquisition',
+        'stop time of acquisition',
+        'global average yaw',
+        'global average pitch',
+        'global average roll',
+        'site description',
+        'flight line',
+        'url',
+    ]
+
+    attrs: Dict[str, str] = {}
+    ann_dir = Path(fp_ann)
+
+    for fid in flight_ids:
+        ann_files = sorted(ann_dir.glob(f'*{fid}*.ann'))
+        if not ann_files:
+            logger.warning("No annotation file found for flight %s in %s", fid, ann_dir)
+            continue
+
+        ann_path = ann_files[0]
+        logger.debug("Reading annotation file: %s", ann_path)
+
+        try:
+            raw = read_annotation(ann_path)
+        except Exception as exc:
+            logger.warning("Failed to read annotation file %s: %s", ann_path, exc)
+            continue
+
+        ann_df = pd.DataFrame(raw).T
+        for field in _WANTED_FIELDS:
+            if field in ann_df.index:
+                safe_key = f"uavsar_{fid}_" + field.replace(' ', '_')
+                attrs[safe_key] = str(ann_df.loc[field, 'value'])
+
+    return attrs
 
 
 def get_uavsar_coherence(
@@ -307,7 +419,12 @@ def get_uavsar_coherence(
     -------
     xr.Dataset
         Dataset with dimensions ``(flight_id, pair, y, x)`` and a single
-        ``coherence`` variable.
+        ``coherence`` variable.  The ``pair`` dimension carries three auxiliary
+        coordinates that share the same dimension:
+
+        * ``time_1`` – start acquisition date as ``datetime64[ns]``.
+        * ``time_2`` – end acquisition date as ``datetime64[ns]``.
+        * ``delta_t`` – temporal baseline in days (integer).
 
     Raises
     ------
@@ -375,6 +492,52 @@ def get_uavsar_coherence(
     # Concatenate all flights into the final 4-D array.
     flight_coord = xr.DataArray(flight_ids, dims=['flight_id'], name='flight_id')
     coherence_da = xr.concat(flight_arrays, dim=flight_coord)
+
+    # ── Auxiliary time coordinates on the 'pair' dimension ─────────────────
+    # Build datetime64 arrays directly from the date_pairs objects so that
+    # downstream code can use sel/groupby on real timestamps instead of
+    # parsing the YYMMDD string label.
+    time_1_values = np.array(
+        [np.datetime64(s.strftime('%Y-%m-%d'), 'ns') for s, _e in date_pairs],
+        dtype='datetime64[ns]',
+    )
+    time_2_values = np.array(
+        [np.datetime64(e.strftime('%Y-%m-%d'), 'ns') for _s, e in date_pairs],
+        dtype='datetime64[ns]',
+    )
+    delta_t_values = np.array(
+        [(e - s).days for s, e in date_pairs], dtype=np.int64
+    )
+
+    coherence_da = coherence_da.assign_coords(
+        time_1=xr.DataArray(
+            time_1_values,
+            dims=['pair'],
+            attrs={
+                'long_name': 'start acquisition date',
+                'standard_name': 'time',
+                'calendar': 'proleptic_gregorian',
+            },
+        ),
+        time_2=xr.DataArray(
+            time_2_values,
+            dims=['pair'],
+            attrs={
+                'long_name': 'end acquisition date',
+                'standard_name': 'time',
+                'calendar': 'proleptic_gregorian',
+            },
+        ),
+        delta_t=xr.DataArray(
+            delta_t_values,
+            dims=['pair'],
+            attrs={
+                'long_name': 'temporal baseline',
+                'units': 'days',
+            },
+        ),
+    )
+
     logger.debug(
         "Coherence array assembled with shape: %s", dict(coherence_da.sizes)
     )

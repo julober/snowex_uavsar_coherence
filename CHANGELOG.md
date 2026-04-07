@@ -4,6 +4,55 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added – Coordinate refactoring, CF metadata, and EDA updates
+
+#### Auxiliary Time Coordinates on the `pair` Dimension (`get_uavsar_coherence`)
+
+- **`time_1`** (`datetime64[ns]`) – start-acquisition date for each interferometric
+  pair, shared along the `pair` dimension. Includes CF `standard_name = 'time'`
+  and `calendar = 'proleptic_gregorian'` attributes.
+- **`time_2`** (`datetime64[ns]`) – end-acquisition date, analogous to `time_1`.
+- **`delta_t`** (`int64`, units: `days`) – temporal baseline computed as
+  `(end_date − start_date).days`.  Replaces ad-hoc string-parsing of the
+  `YYMMDD_YYMMDD` pair label in downstream notebooks and scripts.
+
+#### CF-1.8 / ACDD-1.3 Metadata (`assemble_data`)
+
+- Added `Conventions`, `title`, `summary`, `source`, `date_created`,
+  `geospatial_lat_min/max`, `geospatial_lon_min/max`, `geospatial_bounds_crs`,
+  and `flight_ids` global attributes to the assembled `xr.Dataset` so that
+  the resulting Zarr store is discoverable by standard CF tooling.
+- Added `units = '1'`, `long_name`, and `valid_range` attributes to the
+  `coherence` variable (dimensionless InSAR quantity; CF convention).
+- Added `units = 'degree'` and `long_name` to the `incidence_angle` variable.
+- Called `ds.rio.write_crs('EPSG:4326')` before writing to Zarr so that the
+  spatial reference system is preserved in `.zattrs`.
+
+#### Optional UAVSAR Annotation Metadata (`assemble_data`, `_read_uavsar_annotations`)
+
+- Added optional `fp_ann` parameter to `assemble_data`.  When provided, the
+  new private helper `_read_uavsar_annotations` is called to read one `.ann`
+  file per flight ID using `uavsar_pytools.convert.tiff_conversion.read_annotation`.
+- Extracted fields: `start time of acquisition`, `stop time of acquisition`,
+  `global average yaw`, `global average pitch`, `global average roll`,
+  `site description`, `flight line`, `url`.
+- Attributes are stored with the key pattern `uavsar_{flight_id}_{field}` and
+  merged into `ds.attrs` (and therefore into `.zattrs` of the Zarr root group).
+- Gracefully skips annotation reading if `uavsar_pytools` is not installed
+  (logs a WARNING instead of raising).
+
+#### EDA Notebook (`02_exploratory_data_analysis.ipynb`)
+
+- **Data loading cell**: `data.drop_vars('crs')` is now guarded with an
+  `if 'crs' in data.data_vars` check to avoid `KeyError` on datasets where the
+  CRS is stored as a coordinate rather than a data variable.  Prints the full
+  list of coordinates alongside the data variables for easier inspection.
+- **New cell – Coherence Decay Plot**: Added after the static-variables
+  dashboard.  Computes the spatial mean coherence per pair and per flight ID,
+  then plots it against the `delta_t` coordinate (temporal baseline in days).
+  Falls back to an informative message when `delta_t` is absent so that the
+  notebook remains runnable against older Zarr stores.
+
 ### Changed - `scripts/layers.py`
 
 #### Robustness Hardening (CRS, Error Handling, Magic Numbers)
