@@ -152,7 +152,12 @@ def main():
                     # Always return to the original directory
                     os.chdir(original_cwd)
                     # Clean up tmp directory after processing
-                    shutil.rmtree(tmp_path, ignore_errors=True)
+                    try:
+                        shutil.rmtree(tmp_path)
+                    except FileNotFoundError:
+                        pass
+                    except Exception as e:
+                        logging.warning(f"  --> Failed to clean up tmp directory {tmp_path}: {e}")
                     
                     # Calculate elapsed time for SLC
                     t1_slc = time.time()
@@ -166,7 +171,7 @@ def main():
             if lkv_fp.exists():
                 expected_lkv = out_dir / f"{base_name}.lkv.x.tif"
                 if expected_lkv.exists():
-                    logging.warning(f"  --> Skipping LKV {lkv_name}: {expected_lkv.name} already exists.")
+                    logging.info(f"  --> Skipping LKV {lkv_name}: {expected_lkv.name} already exists.")
                 else:
                     start_time_lkv = datetime.now()
                     t0_lkv = time.time()
@@ -190,7 +195,12 @@ def main():
                     finally:
                         os.chdir(original_cwd)
                         # Clean up tmp directory after processing
-                        shutil.rmtree(tmp_path, ignore_errors=True)
+                        try:
+                            shutil.rmtree(tmp_path)
+                        except FileNotFoundError:
+                            pass
+                        except Exception as e:
+                            logging.warning(f"  --> Failed to clean up tmp directory {tmp_path}: {e}")
                         
                         # Calculate elapsed time for LKV
                         t1_lkv = time.time()
