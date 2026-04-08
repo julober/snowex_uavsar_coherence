@@ -264,11 +264,21 @@ def assemble_data(
     # grid_mapping / crs_wkt attrs behind, causing
     #   RioXarrayError: Multiple grid mappings exist
     # after xr.merge combines layers that each carry a spatial_ref variable.
+    #
+    # ds_list may contain xr.Dataset *or* xr.DataArray objects (e.g. the raw
+    # DEM DataArray and the incidence-angle DataArray).  xr.Dataset exposes a
+    # .variables mapping that includes all data variables and coordinates;
+    # xr.DataArray only has .coords for its coordinate arrays plus the data
+    # variable itself.  We normalise to Dataset first so a single code path
+    # handles both types.
     bad_coords = ['spatial_ref', 'grid_mapping', 'crs', 'band']
     bad_attrs = ['grid_mapping', 'spatial_ref', 'crs_wkt', 'grid_mapping_name', 'proj4']
 
     sanitized_ds_list = []
     for layer in ds_list:
+        # Normalise DataArrays to Dataset so .variables is always available.
+        if isinstance(layer, xr.DataArray):
+            layer = layer.to_dataset(name=layer.name or 'data')
         layer = layer.drop_vars(
             [c for c in bad_coords if c in layer.coords],
             errors='ignore',
