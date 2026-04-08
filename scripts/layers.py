@@ -321,16 +321,17 @@ def assemble_data(
         'title': 'UAVSAR Coherence Data Cube',
         'summary': (
             'Multi-temporal InSAR coherence and co-registered environmental '
-            'co-variables derived from NASA UAVSAR Level-2 products.'
+            'co-variables.'
         ),
-        'source': 'UAVSAR Level-2 coherence products (NASA/JPL)',
+        'source': 'UAVSAR Stack SLC products and derived layers. https://uavsar.jpl.nasa.gov/',
+        'flight_ids': ', '.join(str(f) for f in flight_ids),
         'date_created': pd.Timestamp.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
         'geospatial_lat_min': float(bounds[1]),
         'geospatial_lat_max': float(bounds[3]),
         'geospatial_lon_min': float(bounds[0]),
         'geospatial_lon_max': float(bounds[2]),
         'geospatial_bounds_crs': 'EPSG:4326',
-        'flight_ids': ', '.join(str(f) for f in flight_ids),
+        'project_crs': ref.rio.crs.to_string(),
     })
 
     # ── Optional UAVSAR annotation metadata ──────────────────────────────────
@@ -836,7 +837,10 @@ def get_snow_climatology(
     # see the draft PR comment produced by this commit for details.
     if 'snow_class' in ds:
         ds['snow_class'].attrs.setdefault(
-            'long_name', 'NSIDC-0768 seasonal snow classification'
+            'units': '1',
+            'valid_range': [1, 8],
+            'fill_value': 9,
+            'long_name': 'NSIDC-0768 seasonal snow classification'
         )
 
     return ds
@@ -1124,14 +1128,17 @@ def get_snow_metrics(
     # verification — see the draft PR comment for details.
     if 'swe_accum' in out:
         out['swe_accum'].attrs.update({
+            'units': 'm', 
             'long_name': 'accumulated SWE gain over coherence interval',
         })
     if 'swe_ablate' in out:
         out['swe_ablate'].attrs.update({
+            'units': 'm',
             'long_name': 'accumulated SWE loss (absolute value) over coherence interval',
         })
     if 'density_change' in out:
         out['density_change'].attrs.update({
+            'units': '1', 
             'long_name': 'change in bulk snow density over coherence interval',
         })
 
@@ -1424,6 +1431,7 @@ def get_aorc_metrics(
     # (positive degree-days) or degree_Celsius × h — see draft PR comment.
     if 'total_posdeg' in ds:
         ds['total_posdeg'].attrs.update({
+            'units': 'positive degree-hours', 
             'long_name': 'accumulated positive air temperature over coherence interval',
         })
 
@@ -1464,7 +1472,8 @@ def get_aorc_metrics(
     }
     for var, long_name in _precip_meta.items():
         if var in ds:
-            ds[var].attrs.update({'long_name': long_name})
+            ds[var].attrs.update({'long_name': long_name,
+                                  'units': 'mm'})
 
     return ds
 
