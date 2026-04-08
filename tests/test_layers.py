@@ -35,7 +35,12 @@ import xarray as xr
 
 # The conftest.py already inserted the repo root and scripts/ into sys.path
 # and stubbed the heavy third-party imports, so the import below will succeed.
-from layers import get_years, assemble_data  # noqa: E402 (post-path-setup import)
+from layers import (  # noqa: E402 (post-path-setup import)
+    assemble_data,
+    get_uavsar_coherence,
+    get_uavsar_incidence,
+    get_years,
+)
 
 # ---------------------------------------------------------------------------
 # 1. Unit tests — get_years
@@ -121,46 +126,30 @@ class TestGetUavsarCoherence:
 
     def test_output_contains_coherence_variable(self, tmp_path, date_pairs, flight_ids, ref_grid):
         """The returned Dataset must contain a ``coherence`` variable."""
-        from layers import get_uavsar_coherence
-
         for fid in flight_ids:
             self._make_flight_dir(tmp_path, fid, date_pairs)
 
         pair_ds = self._make_pair_ds()
+        renamed = pair_ds.rename({"band_data": "coherence"})
 
-        with (
-            patch("layers.xr.open_dataset", return_value=pair_ds),
-            patch("layers.xr.Dataset.rio") as mock_rio,
-        ):
-            mock_rio.write_crs = MagicMock(return_value=None)
-            # reproject_match returns the same dataset shape.
-            mock_reprojected = pair_ds.rename({"band_data": "coherence"})
-            mock_reprojected_ds = mock_reprojected
+        with patch("layers.xr.open_dataset", side_effect=lambda path, **kw: pair_ds):
+            with patch("xarray.Dataset.rio", create=True) as ds_rio:
+                ds_rio.write_crs = MagicMock(return_value=None)
+                ds_rio.reproject_match = MagicMock(return_value=renamed)
 
-            def fake_open_dataset(path, **kwargs):
-                return pair_ds
-
-            with patch("layers.xr.open_dataset", side_effect=fake_open_dataset):
-                # Also patch reproject_match at the rioxarray accessor level.
-                with patch("xarray.Dataset.rio", create=True) as ds_rio:
-                    ds_rio.write_crs = MagicMock(return_value=None)
-                    ds_rio.reproject_match = MagicMock(return_value=mock_reprojected_ds)
-
-                    result = get_uavsar_coherence(
-                        aoi=None,  # not used when files exist
-                        date_pairs=date_pairs,
-                        flight_ids=flight_ids,
-                        crs="EPSG:4326",
-                        ref_grid=ref_grid,
-                        fp=str(tmp_path),
-                    )
+                result = get_uavsar_coherence(
+                    aoi=None,
+                    date_pairs=date_pairs,
+                    flight_ids=flight_ids,
+                    crs="EPSG:4326",
+                    ref_grid=ref_grid,
+                    fp=str(tmp_path),
+                )
 
         assert "coherence" in result
 
     def test_missing_flight_dir_raises(self, tmp_path, date_pairs, flight_ids, ref_grid):
         """A missing flight directory must raise ``FileNotFoundError``."""
-        from layers import get_uavsar_coherence
-
         with pytest.raises(FileNotFoundError, match="Flight directory not found"):
             get_uavsar_coherence(
                 aoi=None,
@@ -173,8 +162,6 @@ class TestGetUavsarCoherence:
 
     def test_missing_coherence_file_raises(self, tmp_path, date_pairs, flight_ids, ref_grid):
         """A flight directory that exists but has no matching files raises ``FileNotFoundError``."""
-        from layers import get_uavsar_coherence
-
         for fid in flight_ids:
             (tmp_path / str(fid)).mkdir(parents=True)
 
@@ -190,8 +177,6 @@ class TestGetUavsarCoherence:
 
     def test_delta_t_coordinate_values(self, tmp_path, date_pairs, flight_ids, ref_grid):
         """``delta_t`` coordinate must equal ``(end_date - start_date).days``."""
-        from layers import get_uavsar_coherence
-
         for fid in flight_ids:
             self._make_flight_dir(tmp_path, fid, date_pairs)
 
@@ -254,8 +239,6 @@ class TestGetUavsarIncidence:
 
     def test_output_named_incidence_angle(self, tmp_path, flight_ids, ref_grid, aoi):
         """The result DataArray must have the name ``'incidence_angle'``."""
-        from layers import get_uavsar_incidence
-
         for fid in flight_ids:
             self._make_inc_file(tmp_path, fid)
 
@@ -280,8 +263,6 @@ class TestGetUavsarIncidence:
 
     def test_missing_incidence_file_raises(self, tmp_path, flight_ids, ref_grid, aoi):
         """A missing incidence file must raise ``FileNotFoundError``."""
-        from layers import get_uavsar_incidence
-
         with pytest.raises(FileNotFoundError, match="Could not find pre-calculated incidence file"):
             get_uavsar_incidence(
                 aoi=aoi,
@@ -396,7 +377,7 @@ class TestAssembleDataSanitization:
             aoi=aoi,
             date_pairs=date_pairs,
             flight_ids=flight_ids,
-            fp_dest=None,   # skip writing to disk
+            fp_dest=None,  # skip writing to disk
             fp_coh="/dev/null",
             fp_inc="/dev/null",
             fp_snowclimate="/dev/null",
