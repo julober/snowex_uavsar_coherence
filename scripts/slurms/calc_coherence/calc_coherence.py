@@ -23,6 +23,10 @@ import sys
 import re
 import logging
 import argparse
+<<<<<<< HEAD
+=======
+import itertools
+>>>>>>> a4838c7 (merge)
 from collections import defaultdict
 from pathlib import Path
 
@@ -129,10 +133,17 @@ def run_interferometric(
         group_out_dir = Path(out_dir) / site / flight
         group_out_dir.mkdir(parents=True, exist_ok=True)
 
+<<<<<<< HEAD
         for i in range(len(members) - 1):
             f1, f2 = members[i], members[i + 1]
             date1, date2 = f1["date"], f2["date"]
 
+=======
+        for f1, f2 in itertools.combinations(members, 2):
+            date1 = f1["date"]
+            date2 = f2["date"]
+                        
+>>>>>>> a4838c7 (merge)
             # Prevent self-coherence (same date)
             if date1 == date2:
                 logger.warning(
