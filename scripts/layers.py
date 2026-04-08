@@ -257,21 +257,26 @@ def assemble_data(
     logger.debug("All layers validated for spatial alignment")
 
     # ── Pre-merge "scorched earth" sanitization ─────────────────────────────
-    # Remove any CRS/grid-mapping artefact coordinates and clear all per-layer
-    # global attributes so that no upstream metadata (e.g. NSIDC paper URLs,
-    # NLCD source strings) leaks into the final store's .zattrs.
-    _ARTEFACT_COORDS = ['spatial_ref', 'grid_mapping', 'crs', 'band']
+    # Remove all CRS/grid-mapping artefacts from both data variables AND
+    # coordinate arrays.  Using layer.variables (not layer.data_vars) is
+    # critical: rioxarray stores the active CRS reference inside the attrs of
+    # coordinate arrays (x, y) so iterating only data_vars leaves stale
+    # grid_mapping / crs_wkt attrs behind, causing
+    #   RioXarrayError: Multiple grid mappings exist
+    # after xr.merge combines layers that each carry a spatial_ref variable.
+    bad_coords = ['spatial_ref', 'grid_mapping', 'crs', 'band']
+    bad_attrs = ['grid_mapping', 'spatial_ref', 'crs_wkt', 'grid_mapping_name', 'proj4']
 
     sanitized_ds_list = []
     for layer in ds_list:
         layer = layer.drop_vars(
-            [c for c in _ARTEFACT_COORDS if c in layer.coords],
+            [c for c in bad_coords if c in layer.coords],
             errors='ignore',
         )
         layer.attrs.clear()
-        if hasattr(layer, 'data_vars'):
-            for var in layer.data_vars:
-                layer[var].attrs.pop('grid_mapping', None)
+        for var_name in layer.variables:
+            for attr_key in bad_attrs:
+                layer[var_name].attrs.pop(attr_key, None)
         sanitized_ds_list.append(layer)
     logger.debug("Sanitized %d layers before merge", len(sanitized_ds_list))
 
