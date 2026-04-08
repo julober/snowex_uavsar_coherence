@@ -255,21 +255,25 @@ _DIRTY_ATTRS = {
 
 def _add_dirty_crs(ds: xr.Dataset, coord_name: str = "spatial_ref") -> xr.Dataset:
     """
-    Inject the kinds of CRS artefacts that rioxarray adds to datasets:
+    Inject the kinds of CRS artifacts that rioxarray adds to datasets:
 
     1. A scalar coordinate named *coord_name* (e.g. ``spatial_ref`` or ``crs``).
     2. ``grid_mapping`` and ``crs_wkt`` attrs on every data variable.
     3. ``grid_mapping`` attrs on the coordinate arrays ``x`` and ``y`` — this
        is the pattern that caused ``RioXarrayError: Multiple grid mappings exist``
        and is the primary target of the deep-sanitization fix.
+    4. ``grid_mapping`` in the ``.encoding`` of every variable and coordinate array
+       — rioxarray reads from ``.encoding`` in addition to ``.attrs`` when loading
+       data from NetCDF/Zarr files, so both must be populated for realistic tests.
     """
     # Add the scalar CRS coordinate.
     ds = ds.assign_coords({coord_name: xr.DataArray(0, attrs={"crs_wkt": _DIRTY_ATTRS["crs_wkt"]})})
 
-    # Stamp dirty attrs on every data variable and every coordinate array.
+    # Stamp dirty attrs and encoding on every data variable and every coordinate array.
     for var_name in list(ds.data_vars) + ["x", "y"]:
         for attr_key, attr_val in _DIRTY_ATTRS.items():
             ds[var_name].attrs[attr_key] = attr_val
+            ds[var_name].encoding[attr_key] = attr_val
 
     return ds
 
@@ -288,8 +292,8 @@ def dirty_coh_ds(clean_coh_ds) -> xr.Dataset:
 @pytest.fixture()
 def dirty_incidence_da(clean_incidence_da) -> xr.DataArray:
     """
-    Incidence-angle DataArray with ``grid_mapping`` attrs on the data variable
-    and coordinate arrays.
+    Incidence-angle DataArray with ``grid_mapping`` in both ``.attrs`` and
+    ``.encoding`` on the data variable and coordinate arrays.
 
     Mirrors the actual return type of ``get_uavsar_incidence`` (a DataArray)
     before sanitization in ``assemble_data``.
@@ -297,9 +301,11 @@ def dirty_incidence_da(clean_incidence_da) -> xr.DataArray:
     da = clean_incidence_da.copy()
     for attr_key, attr_val in _DIRTY_ATTRS.items():
         da.attrs[attr_key] = attr_val
+        da.encoding[attr_key] = attr_val
     for coord_name in ["x", "y"]:
         for attr_key, attr_val in _DIRTY_ATTRS.items():
             da[coord_name].attrs[attr_key] = attr_val
+            da[coord_name].encoding[attr_key] = attr_val
     return da
 
 

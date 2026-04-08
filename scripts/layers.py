@@ -287,6 +287,7 @@ def assemble_data(
         for var_name in layer.variables:
             for attr_key in bad_attrs:
                 layer[var_name].attrs.pop(attr_key, None)
+                layer[var_name].encoding.pop(attr_key, None)
         sanitized_ds_list.append(layer)
     logger.debug("Sanitized %d layers before merge", len(sanitized_ds_list))
 

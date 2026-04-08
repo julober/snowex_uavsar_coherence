@@ -395,10 +395,14 @@ class TestAssembleDataSanitization:
         for var in expected_vars:
             assert var in result, f"Variable '{var}' missing after merge"
 
-        # 2. No variable (including coordinate arrays) should retain grid_mapping.
+        # 2. No variable (including coordinate arrays) should retain grid_mapping
+        #    in either .attrs or .encoding.
         for var_name in result.variables:
             assert "grid_mapping" not in result[var_name].attrs, (
-                f"Variable '{var_name}' still has 'grid_mapping' attr after sanitization"
+                f"Variable '{var_name}' still has 'grid_mapping' in .attrs after sanitization"
+            )
+            assert "grid_mapping" not in result[var_name].encoding, (
+                f"Variable '{var_name}' still has 'grid_mapping' in .encoding after sanitization"
             )
 
         # 3. The ``spatial_ref`` coordinate must appear exactly once (written
@@ -482,7 +486,10 @@ class TestAssembleDataSanitization:
 
         for coord_name in ["x", "y"]:
             assert "grid_mapping" not in result[coord_name].attrs, (
-                f"Coordinate array '{coord_name}' still has 'grid_mapping' after sanitization"
+                f"Coordinate array '{coord_name}' still has 'grid_mapping' in .attrs after sanitization"
+            )
+            assert "grid_mapping" not in result[coord_name].encoding, (
+                f"Coordinate array '{coord_name}' still has 'grid_mapping' in .encoding after sanitization"
             )
 
 
