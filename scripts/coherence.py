@@ -1,5 +1,6 @@
 import xarray as xr
 import rioxarray as rxa
+import rasterio
 import numpy as np
 from pathlib import Path
 from scipy.ndimage import gaussian_filter, uniform_filter
@@ -122,3 +123,35 @@ def calc_coherence_matrix(coherences,
 
     mtx = np.where(mtx == 0, np.nan, mtx)
     return mtx
+
+
+def calculate_coherence(
+    file1_path: Path,
+    file2_path: Path,
+    out_path: Path,
+    window_size: int = 5,
+) -> None:
+    """
+    Compute SAR coherence between two geocoded complex TIF files and save the result.
+
+    Parameters
+    ----------
+    file1_path : Path
+        Path to the first input complex TIF file.
+    file2_path : Path
+        Path to the second input complex TIF file.
+    out_path : Path
+        Path where the output coherence TIF will be written.
+    window_size : int
+        Side length (in pixels) of the square uniform averaging window.
+    """
+    coherence_mag = calc_coherence(file1_path, file2_path, window_size=(window_size, window_size))
+
+    with rasterio.open(file1_path) as src:
+        profile = src.profile.copy()
+
+    profile.update(dtype="float32", count=1, nodata=np.nan)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(out_path, "w", **profile) as dst:
+        dst.write(coherence_mag.astype(np.float32), 1)
