@@ -15,7 +15,8 @@ python calc_coherence/calc_coherence.py \
     --input_dir /path/to/geoslcs \
     --out_dir   /path/to/coherence \
     --mode      interferometric \
-    --window_size 5
+    --window_size 5 \
+    --polarization HH
 """
 
 import sys
@@ -83,13 +84,14 @@ def run_interferometric(
     files: list[dict],
     out_dir: Path,
     window_size: int,
+    polarization: str | None = None,
 ) -> None:
     """
     Calculate nearest-neighbor temporal coherence.
 
     Files are grouped by (site, flight, pol, segment).  Within each group
     they are sorted chronologically by *date* and coherence is calculated
-    for every consecutive pair.
+    for every consecutive pair that has distinct acquisition dates.
 
     Parameters
     ----------
@@ -99,11 +101,17 @@ def run_interferometric(
         Root output directory.
     window_size : int
         Square window size for the coherence calculation.
+    polarization : str or None
+        If provided, only process groups whose polarization matches this value
+        (e.g. ``"HH"``, ``"HV"``).  When *None* all polarizations are processed.
     """
     logger = logging.getLogger(__name__)
 
     groups: dict = defaultdict(list)
     for f in files:
+        # Apply polarization filter when requested
+        if polarization is not None and f["pol"] != polarization:
+            continue
         key = (f["site"], f["flight"], f["pol"], f["segment"])
         groups[key].append(f)
 
@@ -124,6 +132,15 @@ def run_interferometric(
         for i in range(len(members) - 1):
             f1, f2 = members[i], members[i + 1]
             date1, date2 = f1["date"], f2["date"]
+
+            # Prevent self-coherence (same date)
+            if date1 == date2:
+                logger.warning(
+                    "Skipping self-coherence pair for %s/%s/%s/%s: both dates are %s.",
+                    site, flight, pol, segment, date1,
+                )
+                continue
+
             out_name = (
                 f"{site}_{flight}_{date1}_{date2}_{pol}_{segment}_int_coh.tif"
             )
@@ -246,6 +263,16 @@ def main() -> None:
         default=5,
         help="Square window size for the coherence calculation (default: 5).",
     )
+    parser.add_argument(
+        "--polarization",
+        type=str,
+        choices=["HH", "HV", "VH", "VV"],
+        default=None,
+        help=(
+            "Optional polarization filter for interferometric mode "
+            "(e.g. HH, HV, VH, VV).  When omitted, all polarizations are processed."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -282,7 +309,7 @@ def main() -> None:
     )
 
     if args.mode == "interferometric":
-        run_interferometric(parsed, out_dir, args.window_size)
+        run_interferometric(parsed, out_dir, args.window_size, polarization=args.polarization)
     else:
         run_copol(parsed, out_dir, args.window_size)
 
