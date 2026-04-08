@@ -214,12 +214,6 @@ def assemble_data(
         raise
     dem.rio.write_crs(crs)
     dem = dem.rio.reproject_match(ref)
-    dem.attrs.update({
-        'units': 'm',
-        'long_name': 'elevation above sea level',
-        'valid_range': [-50.0, 9000.0],
-        'source': '3DEP (USGS 3D Elevation Program)',
-    })
     e = time.time()
     logger.info("Loaded DEM in %.3f seconds.", e - s)
 
@@ -292,6 +286,17 @@ def assemble_data(
 
     # ── Write CRS once, immediately after merge ───────────────────────────────
     ds = ds.rio.write_crs(crs)
+
+    # ── Per-variable CF metadata applied post-merge ───────────────────────────
+    # The sanitization step clears all layer-level attrs, so elevation (which
+    # has no individual loading function) must have its attrs applied here.
+    if 'elevation' in ds:
+        ds['elevation'].attrs.update({
+            'units': 'm',
+            'long_name': 'elevation above sea level',
+            'valid_range': [-50.0, 9000.0],
+            'source': '3DEP (USGS 3D Elevation Program)',
+        })
 
     # ── CF-1.8 / ACDD-1.3 global attributes ──────────────────────────────────
     bounds = aoi.bounds  # (minx, miny, maxx, maxy) in the output CRS
@@ -577,11 +582,14 @@ def get_uavsar_coherence(
     )
 
     # ── CF variable metadata ──────────────────────────────────────────────────
-    coherence_da['coherence'].attrs.update({
-        'units': '1',
-        'long_name': 'InSAR coherence magnitude',
-        'valid_range': [0.0, 1.0],
-    })
+    # coherence_da is a Dataset (xr.open_dataset → xr.concat path); guard with
+    # isinstance to ensure the subscript accessor is safe.
+    if isinstance(coherence_da, xr.Dataset) and 'coherence' in coherence_da:
+        coherence_da['coherence'].attrs.update({
+            'units': '1',
+            'long_name': 'InSAR coherence magnitude',
+            'valid_range': [0.0, 1.0],
+        })
 
     return coherence_da
 
