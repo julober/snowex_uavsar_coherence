@@ -806,6 +806,8 @@ def get_snow_metrics(
         'swe_accum',
         'swe_ablate',
         'density_change',
+        'big_storm',
+        'snow_status_change',
     ]
 
     if metrics == 'all':
@@ -822,6 +824,10 @@ def get_snow_metrics(
     if 'swe_accum' in metrics:
         # Sum of only the positive daily SWE changes (new snow mass).
         out['swe_accum'] = swe_diff.where(swe_diff > 0, other=0).sum(dim='time')
+
+    if 'big_storm' in metrics:
+        # Value of 1 if there was any positive daily SWE change > 1 m (heavy snowfall event), else 0.
+        out['big_storm'] = (swe_diff > 1.0).any(dim='time').astype(int)
 
     if 'swe_ablate' in metrics:
         # Sum of only the negative daily SWE changes (melt/sublimation mass).
@@ -846,6 +852,34 @@ def get_snow_metrics(
 
         out['snow_status_change'] = has_snow_sec - has_snow_ref
 
+    # ── CF variable metadata ──────────────────────────────────────────────────
+    # NOTE: units and valid_range for SWE/SD-derived metrics need manual
+    # verification — see the draft PR comment for details.
+    if 'swe_accum' in out:
+        out['swe_accum'].attrs.update({
+            'units': 'm', 
+            'long_name': 'accumulated SWE gain over coherence interval',
+        })
+    if 'swe_ablate' in out:
+        out['swe_ablate'].attrs.update({
+            'units': 'm',
+            'long_name': 'accumulated SWE loss (absolute value) over coherence interval',
+        })
+    if 'density_change' in out:
+        out['density_change'].attrs.update({
+            'units': '1', 
+            'long_name': 'change in bulk snow density over coherence interval',
+        })
+    if 'big_storm' in out:
+        out['big_storm'].attrs.update({
+            'units': '1',
+            'long_name': 'indicator of any heavy snowfall event (>1 m daily SWE gain) during coherence interval',
+        })
+    if 'snow_status_change' in out:
+        out['snow_status_change'].attrs.update({
+            'units': '1',
+            'long_name': 'change in snow presence status over coherence interval (+1=snow appeared, -1=snow disappeared, 0=no change)',
+        })
     return out
 
 
@@ -1033,12 +1067,15 @@ def get_aorc_metrics(
         'freeze_thaw_cycles',
         'diurnal_temp_range',
         'total_precip',
+        'avg_precip',
         'total_rain',
+        'avg_rain',
         'total_snow',
+        'avg_snow',
         'acq_day_precip',
         'mean_wind',
         'max_wind',
-        'hours_blowing_snow',
+        # 'hours_blowing_snow',
     ]
 
     if metrics == 'all':
@@ -1086,12 +1123,18 @@ def get_aorc_metrics(
     precip = aorc_ds['APCP_surface']
     if 'total_precip' in metrics:
         ds['total_precip'] = precip.sum(dim='time')
+    if 'avg_precip' in metrics:
+        ds['avg_precip'] = precip.mean(dim='time')
     if 'total_rain' in metrics:
         # Sum of precipitation only when temperature is above 0 °C.
         ds['total_rain'] = precip.where(temp > 0, other=0).sum(dim='time')
+    if 'avg_rain' in metrics:
+        ds['avg_rain'] = precip.where(temp > 0, other=np.nan).mean(dim='time')
     if 'total_snow' in metrics:
         # Sum of precipitation only when temperature is at or below 0 °C.
         ds['total_snow'] = precip.where(temp <= 0, other=0).sum(dim='time')
+    if 'avg_snow' in metrics:
+        ds['avg_snow'] = precip.where(temp <= 0, other=np.nan).mean(dim='time')
     if 'acq_day_precip' in metrics:
         # Total precipitation on the reference and secondary acquisition days.
         ds['acq_day_precip'] = precip.isel(time=0) + precip.isel(time=-1)
@@ -1115,6 +1158,72 @@ def get_aorc_metrics(
         ds['max_wind'] = np.sqrt(
             aorc_ds['UGRD_10maboveground']**2 + aorc_ds['VGRD_10maboveground']**2
         ).max(dim='time')
+
+    # ── CF variable metadata ──────────────────────────────────────────────────
+    # Temperature metrics (degrees Celsius after K→°C conversion).
+    _temp_meta = {
+        'mean_temp': 'mean air temperature over coherence interval',
+        'max_temp': 'maximum air temperature over coherence interval',
+        'temp_diff': 'air temperature difference (end − start) over coherence interval',
+        'temp_diff_acq': 'absolute air temperature difference between acquisitions',
+        'diurnal_temp_range': 'mean daily temperature range over coherence interval',
+    }
+    for var, long_name in _temp_meta.items():
+        if var in ds:
+            ds[var].attrs.update({'units': 'degree_Celsius', 'long_name': long_name})
+
+    # total_posdeg accumulates hourly positive temperatures; the AORC dataset is
+    # hourly, so the unit is effectively degree_Celsius × hours.
+    # NOTE: confirm whether this should be expressed as degree_Celsius × d
+    # (positive degree-days) or degree_Celsius × h — see draft PR comment.
+    if 'total_posdeg' in ds:
+        ds['total_posdeg'].attrs.update({
+            'units': 'positive degree-hours', 
+            'long_name': 'accumulated positive air temperature over coherence interval',
+        })
+
+    if 'freeze_thaw_cycles' in ds:
+        ds['freeze_thaw_cycles'].attrs.update({
+            'units': '1',
+            'long_name': 'number of freeze-thaw cycles over coherence interval',
+        })
+
+    # Wind metrics.
+    if 'mean_wind' in ds:
+        ds['mean_wind'].attrs.update({
+            'units': 'm s-1',
+            'long_name': 'mean wind speed over coherence interval',
+        })
+    if 'max_wind' in ds:
+        ds['max_wind'].attrs.update({
+            'units': 'm s-1',
+            'long_name': 'maximum wind speed over coherence interval',
+        })
+    if 'hours_blowing_snow' in ds:
+        ds['hours_blowing_snow'].attrs.update({
+            'units': 'h',
+            'long_name': (
+                f'hours with wind speed exceeding '
+                f'{BLOWING_SNOW_WIND_THRESHOLD_MS} m/s (blowing-snow threshold)'
+            ),
+        })
+
+    # Precipitation metrics.
+    # NOTE: AORC APCP_surface accumulation period and units (kg m⁻² or mm)
+    # need manual verification — see draft PR comment.
+    _precip_meta = {
+        'total_precip': 'total precipitation over coherence interval',
+        'avg_precip': 'average precipitation over coherence interval',
+        'total_rain': 'total liquid precipitation over coherence interval',
+        'avg_rain': 'average liquid precipitation over coherence interval',
+        'total_snow': 'total solid precipitation over coherence interval',
+        'avg_snow': 'average solid precipitation over coherence interval',
+        'acq_day_precip': 'total precipitation on acquisition days',
+    }
+    for var, long_name in _precip_meta.items():
+        if var in ds:
+            ds[var].attrs.update({'long_name': long_name,
+                                  'units': 'mm'})
 
     return ds
 
