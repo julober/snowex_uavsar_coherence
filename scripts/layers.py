@@ -60,6 +60,9 @@ KELVIN_TO_CELSIUS_OFFSET: float = 273.15
 BLOWING_SNOW_WIND_THRESHOLD_MS: float = 6.0
 """Wind speed threshold (m s⁻¹) above which blowing snow is assumed to occur."""
 
+RAIN_SNOW_THRESHOLD: float = 2.0
+"""Wind speed threshold (m s⁻¹) above which blowing snow is assumed to occur."""
+
 MAX_FREEZE_THAW_CYCLES: int = 100
 """Upper clamp for the freeze–thaw cycle count per coherence interval."""
 
@@ -242,6 +245,11 @@ def assemble_data(
 
     ds = xr.merge(ds_list, join='exact', compat='minimal')
     logger.info("Merged %d layers into a single dataset", len(ds_list))
+
+    nan_mask = np.isnan(ds['coherence'].values).any(axis=(0,1))
+    for var in ds.data_vars:
+        if 'x' in ds[var].dims and 'y' in ds[var].dims:
+            ds[var] = ds[var].where(~nan_mask, drop=False)
 
     # Clear original chunking metadata so to_zarr() does not try to reuse
     # stale chunk information and crash.
@@ -806,7 +814,7 @@ def get_snow_metrics(
         'swe_accum',
         'swe_ablate',
         'density_change',
-        'big_storm',
+        'big_accum',
         'snow_status_change',
     ]
 
@@ -822,17 +830,18 @@ def get_snow_metrics(
     sd_diff = ds['SD_Post'].diff(dim='time')
 
     if 'swe_accum' in metrics:
-        # Sum of only the positive daily SWE changes (new snow mass).
-        out['swe_accum'] = swe_diff.where(swe_diff > 0, other=0).sum(dim='time')
+        # Mean of only the positive daily SWE changes (new snow mass).
+        out['swe_accum'] = swe_diff.where(swe_diff > 0, other=0).mean(dim='time') 
 
-    if 'big_storm' in metrics:
+    if 'big_accum' in metrics:
         # Value of 1 if there was any positive daily SWE change > 1 m (heavy snowfall event), else 0.
-        out['big_storm'] = (swe_diff > 1.0).any(dim='time').astype(int)
+        storm = (swe_diff > 1.0).any(dim='time').astype(int)
+        out['big_accum'] = storm.clip(0, 1)
 
     if 'swe_ablate' in metrics:
-        # Sum of only the negative daily SWE changes (melt/sublimation mass).
+        # Mean of only the negative daily SWE changes (melt/sublimation mass).
         # Absolute value makes this easier to interpret as a positive feature.
-        out['swe_ablate'] = abs(swe_diff.where(swe_diff < 0, other=0).sum(dim='time'))
+        out['swe_ablate'] = abs(swe_diff.where(swe_diff < 0, other=0).mean(dim='time'))
 
     if 'density_change' in metrics:
         # Bulk Density = SWE / Snow Depth (division by zero where no snow).
@@ -850,7 +859,7 @@ def get_snow_metrics(
         has_snow_ref = (ds['SWE_Post'].isel(time=0) > 0).astype(int)
         has_snow_sec = (ds['SWE_Post'].isel(time=-1) > 0).astype(int)
 
-        out['snow_status_change'] = has_snow_sec - has_snow_ref
+        out['snow_status_change'] = (has_snow_sec - has_snow_ref).clip(-1, 1)
 
     # ── CF variable metadata ──────────────────────────────────────────────────
     # NOTE: units and valid_range for SWE/SD-derived metrics need manual
@@ -1095,7 +1104,7 @@ def get_aorc_metrics(
         ds['total_posdeg'] = (
             temp
             .where(temp > 0, other=0)
-            .sum(dim='time')
+            .mean(dim='time')
         )
     if 'temp_diff' in metrics:
         ds['temp_diff'] = temp.isel(time=-1) - temp.isel(time=0)
@@ -1127,14 +1136,14 @@ def get_aorc_metrics(
         ds['avg_precip'] = precip.mean(dim='time')
     if 'total_rain' in metrics:
         # Sum of precipitation only when temperature is above 0 °C.
-        ds['total_rain'] = precip.where(temp > 0, other=0).sum(dim='time')
+        ds['total_rain'] = precip.where(temp > RAIN_SNOW_THRESHOLD, other=0).sum(dim='time')
     if 'avg_rain' in metrics:
-        ds['avg_rain'] = precip.where(temp > 0, other=np.nan).mean(dim='time')
+        ds['avg_rain'] = precip.where(temp > RAIN_SNOW_THRESHOLD, other=0).mean(dim='time')
     if 'total_snow' in metrics:
         # Sum of precipitation only when temperature is at or below 0 °C.
-        ds['total_snow'] = precip.where(temp <= 0, other=0).sum(dim='time')
+        ds['total_snow'] = precip.where(temp <= RAIN_SNOW_THRESHOLD, other=0).sum(dim='time')
     if 'avg_snow' in metrics:
-        ds['avg_snow'] = precip.where(temp <= 0, other=np.nan).mean(dim='time')
+        ds['avg_snow'] = precip.where(temp <= RAIN_SNOW_THRESHOLD, other=0).mean(dim='time')
     if 'acq_day_precip' in metrics:
         # Total precipitation on the reference and secondary acquisition days.
         ds['acq_day_precip'] = precip.isel(time=0) + precip.isel(time=-1)
