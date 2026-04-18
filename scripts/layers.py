@@ -86,6 +86,7 @@ def assemble_data(
     fp_coh: str = '../data/coherence/',
     fp_inc: str = '../data/inc_angle/',
     fp_snowclimate: str = '../data/NSIDC-0768/',
+    fp_ann: Optional[str] = None,
     crs: str = 'EPSG:4326',
     res: int = 30,
     overwrite: bool = False,
@@ -127,6 +128,11 @@ def assemble_data(
         Directory containing pre-calculated incidence angle ``.tif`` files.
     fp_snowclimate:
         Directory containing the NSIDC-0768 snow-climatology NetCDF file.
+    fp_ann:
+        Optional directory containing UAVSAR ``.ann`` annotation files.  When
+        provided, key flight metadata (e.g. start time, average yaw/pitch) are
+        read and stored as global attributes in the output Zarr store to
+        improve provenance tracking and CF/ACDD compliance.
     crs:
         Coordinate reference system string (default ``'EPSG:4326'``).
     res:
@@ -172,6 +178,7 @@ def assemble_data(
     logger.debug("Reference grid created with resolution %g (CRS units)", res_grid)
 
     # 3. Get UAVSAR coherence layers
+    logger.info("Starting to load Coherence...")
     s = time.time()
     coh = get_uavsar_coherence(
         aoi=aoi,
@@ -182,10 +189,11 @@ def assemble_data(
         fp=fp_coh,
     )
     e = time.time()
-    logger.info("Loaded coherence for flights %s in %.3f seconds.", flight_ids, e - s)
+    logger.info("Loaded Coherence for flights %s in %.3f seconds.", flight_ids, e - s)
     logger.debug("Coherence dataset shape: %s", dict(coh.sizes))
 
     # 4. Get incidence angle
+    logger.info("Starting to load Incidence Angle...")
     s = time.time()
     incidence = get_uavsar_incidence(
         aoi=aoi,
@@ -194,9 +202,10 @@ def assemble_data(
         ref_grid=ref,
     )
     e = time.time()
-    logger.info("Loaded incidence angles for flights %s in %.3f seconds.", flight_ids, e - s)
+    logger.info("Loaded Incidence Angle for flights %s in %.3f seconds.", flight_ids, e - s)
 
     # 5. Get DEM
+    logger.info("Starting to load DEM...")
     s = time.time()
     try:
         dem = py3dep.get_dem(geometry=aoi, resolution=res, crs=crs)
@@ -206,42 +215,129 @@ def assemble_data(
     dem.rio.write_crs(crs)
     dem = dem.rio.reproject_match(ref)
     e = time.time()
-    logger.info("Got DEM in %.3f seconds.", e - s)
+    logger.info("Loaded DEM in %.3f seconds.", e - s)
 
+    # 6. Get topographic derivative layers
+    logger.info("Starting to load Topographic Layers...")
     s = time.time()
     topo = get_topo_layers(dem=dem, ref_grid=ref)
     e = time.time()
-    logger.info("Got topo layers: %s in %.3f seconds.", list(topo.keys()), e - s)
+    logger.info("Loaded Topographic Layers: %s in %.3f seconds.", list(topo.keys()), e - s)
 
-    # 6. Get NLCD layers
+    # 7. Get NLCD layers
+    logger.info("Starting to load NLCD Layers...")
     s = time.time()
     nlcd = get_nlcd_layers(aoi=aoi, crs=crs, ref_grid=ref)
     e = time.time()
-    logger.info("Got NLCD %s in %.3f seconds.", list(nlcd.keys()), e - s)
+    logger.info("Loaded NLCD Layers %s in %.3f seconds.", list(nlcd.keys()), e - s)
 
+    # 8. Get snow climatology
+    logger.info("Starting to load Snow Climatology...")
     s = time.time()
     snow_class = get_snow_climatology(aoi=aoi, crs=crs, fp=fp_snowclimate, ref_grid=ref)
     e = time.time()
-    logger.info("Got snow climatology: %s in %.3f seconds.", list(snow_class.keys()), e - s)
+    logger.info("Loaded Snow Climatology: %s in %.3f seconds.", list(snow_class.keys()), e - s)
 
-    # 7. Get AORC meteorological layers
+    # 9. Get AORC meteorological layers
+    logger.info("Starting to load AORC Meteorological Layers...")
     s = time.time()
     aorc = get_aorc_layers(aoi=aoi, date_pairs=date_pairs, crs=crs, ref_grid=ref)
     e = time.time()
-    logger.info("Got AORC: %s in %.3f seconds.", list(aorc.keys()), e - s)
+    logger.info("Loaded AORC Meteorological Layers: %s in %.3f seconds.", list(aorc.keys()), e - s)
 
-    # 8. Get UCLA SWE/SD layers
+    # 10. Get UCLA SWE/SD layers
+    logger.info("Starting to load UCLA SWE/SD Layers...")
     s = time.time()
     snow = get_snow_layers(aoi=aoi, date_pairs=date_pairs, crs=crs, ref_grid=ref)
     e = time.time()
-    logger.info("Got SWE layers: %s in %.3f seconds.", list(snow.keys()), e - s)
+    logger.info("Loaded UCLA SWE/SD Layers: %s in %.3f seconds.", list(snow.keys()), e - s)
 
     ds_list = [coh, incidence, dem, topo, nlcd, snow_class, snow, aorc]
     validate_alignment(ds_list)
     logger.debug("All layers validated for spatial alignment")
 
-    ds = xr.merge(ds_list, join='exact', compat='minimal')
-    logger.info("Merged %d layers into a single dataset", len(ds_list))
+    # ── Pre-merge "scorched earth" sanitization ─────────────────────────────
+    # Remove all CRS/grid-mapping artefacts from both data variables AND
+    # coordinate arrays.  Using layer.variables (not layer.data_vars) is
+    # critical: rioxarray stores the active CRS reference inside the attrs of
+    # coordinate arrays (x, y) so iterating only data_vars leaves stale
+    # grid_mapping / crs_wkt attrs behind, causing
+    #   RioXarrayError: Multiple grid mappings exist
+    # after xr.merge combines layers that each carry a spatial_ref variable.
+    #
+    # ds_list may contain xr.Dataset *or* xr.DataArray objects (e.g. the raw
+    # DEM DataArray and the incidence-angle DataArray).  xr.Dataset exposes a
+    # .variables mapping that includes all data variables and coordinates;
+    # xr.DataArray only has .coords for its coordinate arrays plus the data
+    # variable itself.  We normalise to Dataset first so a single code path
+    # handles both types.
+    bad_coords = ['spatial_ref', 'grid_mapping', 'crs', 'band']
+    bad_attrs = ['grid_mapping', 'spatial_ref', 'crs_wkt', 'grid_mapping_name', 'proj4']
+
+    sanitized_ds_list = []
+    for layer in ds_list:
+        # Normalise DataArrays to Dataset so .variables is always available.
+        if isinstance(layer, xr.DataArray):
+            layer = layer.to_dataset(name=layer.name or 'data')
+        layer = layer.drop_vars(
+            [c for c in bad_coords if c in layer.coords],
+            errors='ignore',
+        )
+        layer.attrs.clear()
+        for var_name in layer.variables:
+            for attr_key in bad_attrs:
+                layer[var_name].attrs.pop(attr_key, None)
+                layer[var_name].encoding.pop(attr_key, None)
+        sanitized_ds_list.append(layer)
+    logger.debug("Sanitized %d layers before merge", len(sanitized_ds_list))
+
+    # ── Strict merge ─────────────────────────────────────────────────────────
+    ds = xr.merge(
+        sanitized_ds_list,
+        join='exact',
+        compat='no_conflicts',
+        combine_attrs='drop',
+    )
+    logger.info("Merged %d layers into a single dataset", len(sanitized_ds_list))
+
+    # ── Write CRS once, immediately after merge ───────────────────────────────
+    ds = ds.rio.write_crs(crs)
+
+    # ── Per-variable CF metadata applied post-merge ───────────────────────────
+    # The sanitization step clears all layer-level attrs, so elevation (which
+    # has no individual loading function) must have its attrs applied here.
+    if 'elevation' in ds:
+        ds['elevation'].attrs.update({
+            'units': 'm',
+            'long_name': 'elevation above sea level',
+            'valid_range': [-50.0, 9000.0],
+            'source': '3DEP (USGS 3D Elevation Program)',
+        })
+
+    # ── CF-1.8 / ACDD-1.3 global attributes ──────────────────────────────────
+    bounds = aoi.bounds  # (minx, miny, maxx, maxy) in the output CRS
+    ds.attrs.update({
+        'Conventions': 'CF-1.8, ACDD-1.3',
+        'title': 'UAVSAR Coherence Data Cube',
+        'summary': (
+            'Multi-temporal InSAR coherence and co-registered environmental '
+            'co-variables.'
+        ),
+        'source': 'UAVSAR Stack SLC products and derived layers. https://uavsar.jpl.nasa.gov/',
+        'flight_ids': ', '.join(str(f) for f in flight_ids),
+        'date_created': pd.Timestamp.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'geospatial_lat_min': float(bounds[1]),
+        'geospatial_lat_max': float(bounds[3]),
+        'geospatial_lon_min': float(bounds[0]),
+        'geospatial_lon_max': float(bounds[2]),
+        'geospatial_bounds_crs': 'EPSG:4326',
+        'project_crs': ref.rio.crs.to_string(),
+    })
+
+    # ── Optional UAVSAR annotation metadata ──────────────────────────────────
+    if fp_ann is not None:
+        ann_attrs = _read_uavsar_annotations(fp_ann=fp_ann, flight_ids=flight_ids)
+        ds.attrs.update(ann_attrs)
 
     # Clear original chunking metadata so to_zarr() does not try to reuse
     # stale chunk information and crash.
@@ -267,6 +363,76 @@ def assemble_data(
         logger.info("Dataset written to %s", fp_dest)
     
     return ds
+
+
+def _read_uavsar_annotations(fp_ann: str, flight_ids: List[str]) -> Dict[str, str]:
+    """
+    Read UAVSAR annotation files and return a flat dict of provenance attributes.
+
+    One ``.ann`` file is processed per flight ID (the first match under
+    ``fp_ann``).  The returned dict is suitable for merging directly into
+    ``ds.attrs`` and therefore into ``.zattrs`` of the root Zarr group.
+
+    Parameters
+    ----------
+    fp_ann:
+        Directory that contains UAVSAR ``.ann`` annotation files.
+    flight_ids:
+        List of UAVSAR flight-heading identifiers whose annotation files
+        should be parsed.
+
+    Returns
+    -------
+    Dict[str, str]
+        Flat mapping of ``uavsar_{flight_id}_{key}`` → value strings.
+        Empty dict if ``uavsar_pytools`` is not installed or no files are
+        found.
+    """
+    try:
+        from uavsar_pytools.convert.tiff_conversion import read_annotation
+    except ImportError:
+        logger.warning(
+            "uavsar_pytools is not installed; annotation metadata will be skipped."
+        )
+        return {}
+
+    # Fields to extract from each annotation file (subset relevant for CF/ACDD).
+    _WANTED_FIELDS = [
+        'start time of acquisition',
+        'stop time of acquisition',
+        'global average yaw',
+        'global average pitch',
+        'global average roll',
+        'site description',
+        'flight line',
+        'url',
+    ]
+
+    attrs: Dict[str, str] = {}
+    ann_dir = Path(fp_ann)
+
+    for fid in flight_ids:
+        ann_files = sorted(ann_dir.glob(f'*{fid}*.ann'))
+        if not ann_files:
+            logger.warning("No annotation file found for flight %s in %s", fid, ann_dir)
+            continue
+
+        ann_path = ann_files[0]
+        logger.debug("Reading annotation file: %s", ann_path)
+
+        try:
+            ann_raw = read_annotation(ann_path)
+        except Exception as exc:
+            logger.warning("Failed to read annotation file %s: %s", ann_path, exc)
+            continue
+
+        ann_df = pd.DataFrame(ann_raw).T
+        for field in _WANTED_FIELDS:
+            if field in ann_df.index:
+                safe_key = f"uavsar_{fid}_{field.replace(' ', '_')}"
+                attrs[safe_key] = str(ann_df.loc[field, 'value'])
+
+    return attrs
 
 
 def get_uavsar_coherence(
@@ -307,7 +473,12 @@ def get_uavsar_coherence(
     -------
     xr.Dataset
         Dataset with dimensions ``(flight_id, pair, y, x)`` and a single
-        ``coherence`` variable.
+        ``coherence`` variable.  The ``pair`` dimension carries three auxiliary
+        coordinates that share the same dimension:
+
+        * ``time_1`` – start acquisition date as ``datetime64[ns]``.
+        * ``time_2`` – end acquisition date as ``datetime64[ns]``.
+        * ``delta_t`` – temporal baseline in days (integer).
 
     Raises
     ------
@@ -375,9 +546,67 @@ def get_uavsar_coherence(
     # Concatenate all flights into the final 4-D array.
     flight_coord = xr.DataArray(flight_ids, dims=['flight_id'], name='flight_id')
     coherence_da = xr.concat(flight_arrays, dim=flight_coord)
+
+    # ── Auxiliary time coordinates on the 'pair' dimension ─────────────────
+    # Build datetime64 arrays directly from the date_pairs objects so that
+    # downstream code can use sel/groupby on real timestamps instead of
+    # parsing the YYMMDD string label.
+    time_1_values, time_2_values, delta_t_values = zip(
+        *[
+            (
+                np.datetime64(s.strftime('%Y-%m-%d'), 'ns'),
+                np.datetime64(e.strftime('%Y-%m-%d'), 'ns'),
+                (e - s).days,
+            )
+            for s, e in date_pairs
+        ]
+    )
+    time_1_values = np.array(time_1_values, dtype='datetime64[ns]')
+    time_2_values = np.array(time_2_values, dtype='datetime64[ns]')
+    delta_t_values = np.array(delta_t_values, dtype=np.int64)
+
+    coherence_da = coherence_da.assign_coords(
+        time_1=xr.DataArray(
+            time_1_values,
+            dims=['pair'],
+            attrs={
+                'long_name': 'start acquisition date',
+                'standard_name': 'time',
+                'calendar': 'proleptic_gregorian',
+            },
+        ),
+        time_2=xr.DataArray(
+            time_2_values,
+            dims=['pair'],
+            attrs={
+                'long_name': 'end acquisition date',
+                'standard_name': 'time',
+                'calendar': 'proleptic_gregorian',
+            },
+        ),
+        delta_t=xr.DataArray(
+            delta_t_values,
+            dims=['pair'],
+            attrs={
+                'long_name': 'temporal baseline',
+                'units': 'days',
+            },
+        ),
+    )
+
     logger.debug(
         "Coherence array assembled with shape: %s", dict(coherence_da.sizes)
     )
+
+    # ── CF variable metadata ──────────────────────────────────────────────────
+    # coherence_da is a Dataset (xr.open_dataset → xr.concat path); guard with
+    # isinstance to ensure the subscript accessor is safe.
+    if isinstance(coherence_da, xr.Dataset) and 'coherence' in coherence_da:
+        coherence_da['coherence'].attrs.update({
+            'units': '1',
+            'long_name': 'InSAR coherence magnitude',
+            'valid_range': [0.0, 1.0],
+        })
 
     return coherence_da
 
@@ -458,6 +687,13 @@ def get_uavsar_incidence(
         "Incidence angle array assembled with shape: %s", dict(incidence_da.sizes)
     )
 
+    # ── CF variable metadata ──────────────────────────────────────────────────
+    incidence_da.attrs.update({
+        'units': 'degree',
+        'long_name': 'local incidence angle',
+        'valid_range': [0.0, 90.0],
+    })
+
     return incidence_da
 
 
@@ -503,6 +739,19 @@ def get_nlcd_layers(
 
     if ref_grid is not None:
         ds = ds.rio.reproject_match(ref_grid)
+
+    # ── CF variable metadata ──────────────────────────────────────────────────
+    # NOTE: units and valid_range for NLCD variables need manual verification —
+    # see the draft PR comment produced by this commit for details.
+    for var in ds.data_vars:
+        if var.startswith('cover_'):
+            ds[var].attrs.setdefault(
+                'long_name', f'NLCD land cover class code ({var.split("_")[-1]})'
+            )
+        elif var.startswith('canopy_'):
+            ds[var].attrs.setdefault(
+                'long_name', f'NLCD percent tree canopy cover ({var.split("_")[-1]})'
+            )
 
     return ds
 
@@ -583,6 +832,17 @@ def get_snow_climatology(
         g = gpd.GeoSeries([aoi], crs=crs)
         ds = ds.rio.clip(g, crs=crs)
 
+    # ── CF variable metadata ──────────────────────────────────────────────────
+    # NOTE: units and valid_range for snow_class need manual verification —
+    # see the draft PR comment produced by this commit for details.
+    if 'snow_class' in ds:
+        ds['snow_class'].attrs.setdefault(
+            'units': '1',
+            'valid_range': [1, 8],
+            'fill_value': 9,
+            'long_name': 'NSIDC-0768 seasonal snow classification'
+        )
+
     return ds
 
 
@@ -644,6 +904,23 @@ def get_topo_layers(
 
     if ref_grid is not None:
         ds = ds.rio.reproject_match(ref_grid)
+
+    # ── CF variable metadata ──────────────────────────────────────────────────
+    ds['slope'].attrs.update({
+        'units': 'degree',
+        'long_name': 'terrain slope angle',
+        'valid_range': [0.0, 90.0],
+    })
+    ds['aspect'].attrs.update({
+        'units': 'degree',
+        'long_name': 'terrain aspect (clockwise from north)',
+        'valid_range': [0.0, 360.0],
+    })
+    # NOTE: curvature units need manual verification — see the draft PR comment
+    # produced by this commit for details.
+    ds['curve'].attrs.update({
+        'long_name': 'terrain curvature',
+    })
 
     return ds
 
@@ -845,6 +1122,25 @@ def get_snow_metrics(
         has_snow_sec = (ds['SWE_Post'].isel(time=-1) > 0).astype(int)
 
         out['snow_status_change'] = has_snow_sec - has_snow_ref
+
+    # ── CF variable metadata ──────────────────────────────────────────────────
+    # NOTE: units and valid_range for SWE/SD-derived metrics need manual
+    # verification — see the draft PR comment for details.
+    if 'swe_accum' in out:
+        out['swe_accum'].attrs.update({
+            'units': 'm', 
+            'long_name': 'accumulated SWE gain over coherence interval',
+        })
+    if 'swe_ablate' in out:
+        out['swe_ablate'].attrs.update({
+            'units': 'm',
+            'long_name': 'accumulated SWE loss (absolute value) over coherence interval',
+        })
+    if 'density_change' in out:
+        out['density_change'].attrs.update({
+            'units': '1', 
+            'long_name': 'change in bulk snow density over coherence interval',
+        })
 
     return out
 
@@ -1115,6 +1411,69 @@ def get_aorc_metrics(
         ds['max_wind'] = np.sqrt(
             aorc_ds['UGRD_10maboveground']**2 + aorc_ds['VGRD_10maboveground']**2
         ).max(dim='time')
+
+    # ── CF variable metadata ──────────────────────────────────────────────────
+    # Temperature metrics (degrees Celsius after K→°C conversion).
+    _temp_meta = {
+        'mean_temp': 'mean air temperature over coherence interval',
+        'max_temp': 'maximum air temperature over coherence interval',
+        'temp_diff': 'air temperature difference (end − start) over coherence interval',
+        'temp_diff_acq': 'absolute air temperature difference between acquisitions',
+        'diurnal_temp_range': 'mean daily temperature range over coherence interval',
+    }
+    for var, long_name in _temp_meta.items():
+        if var in ds:
+            ds[var].attrs.update({'units': 'degree_Celsius', 'long_name': long_name})
+
+    # total_posdeg accumulates hourly positive temperatures; the AORC dataset is
+    # hourly, so the unit is effectively degree_Celsius × hours.
+    # NOTE: confirm whether this should be expressed as degree_Celsius × d
+    # (positive degree-days) or degree_Celsius × h — see draft PR comment.
+    if 'total_posdeg' in ds:
+        ds['total_posdeg'].attrs.update({
+            'units': 'positive degree-hours', 
+            'long_name': 'accumulated positive air temperature over coherence interval',
+        })
+
+    if 'freeze_thaw_cycles' in ds:
+        ds['freeze_thaw_cycles'].attrs.update({
+            'units': '1',
+            'long_name': 'number of freeze-thaw cycles over coherence interval',
+        })
+
+    # Wind metrics.
+    if 'mean_wind' in ds:
+        ds['mean_wind'].attrs.update({
+            'units': 'm s-1',
+            'long_name': 'mean wind speed over coherence interval',
+        })
+    if 'max_wind' in ds:
+        ds['max_wind'].attrs.update({
+            'units': 'm s-1',
+            'long_name': 'maximum wind speed over coherence interval',
+        })
+    if 'hours_blowing_snow' in ds:
+        ds['hours_blowing_snow'].attrs.update({
+            'units': 'h',
+            'long_name': (
+                f'hours with wind speed exceeding '
+                f'{BLOWING_SNOW_WIND_THRESHOLD_MS} m/s (blowing-snow threshold)'
+            ),
+        })
+
+    # Precipitation metrics.
+    # NOTE: AORC APCP_surface accumulation period and units (kg m⁻² or mm)
+    # need manual verification — see draft PR comment.
+    _precip_meta = {
+        'total_precip': 'total precipitation over coherence interval',
+        'total_rain': 'total liquid precipitation over coherence interval',
+        'total_snow': 'total solid precipitation over coherence interval',
+        'acq_day_precip': 'total precipitation on acquisition days',
+    }
+    for var, long_name in _precip_meta.items():
+        if var in ds:
+            ds[var].attrs.update({'long_name': long_name,
+                                  'units': 'mm'})
 
     return ds
 
