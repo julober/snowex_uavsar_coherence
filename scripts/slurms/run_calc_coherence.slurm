@@ -1,21 +1,13 @@
 #!/bin/bash
 #SBATCH -J calc_coherence                          # job name
-<<<<<<< HEAD
-#SBATCH --output=logs/%x-%A_%a.log                 # per-array-task log (%A = job ID, %a = task ID)
-=======
 #SBATCH -o /bsuhome/julialober/logs/%x-%A_%a.log                # per-array-task log (%A = job ID, %a = task ID)
->>>>>>> a4838c7 (merge)
 #SBATCH -n 1                                        # total number of tasks requested
 #SBATCH -N 1                                        # number of nodes you want to run on
 #SBATCH -p bsudfq                                   # queue (partition)
 #SBATCH -t 12:00:00                                 # run time (hh:mm:ss)
 #SBATCH --mail-user=julialober@u.boisestate.edu
 #SBATCH --mail-type=END
-<<<<<<< HEAD
-#SBATCH --array=1-999%10                            # upper bound auto-trimmed; adjust %N to set max concurrent tasks
-=======
 #SBATCH --array=1-22%25                            # upper bound auto-trimmed; adjust %N to set max concurrent tasks
->>>>>>> a4838c7 (merge)
 
 echo "Starting coherence calculation (array task ${SLURM_ARRAY_TASK_ID})..."
 echo "Making log dir..."
@@ -27,7 +19,7 @@ source ~/.bashrc
 # 2. Base data directories
 # Change these paths to point to your actual data locations
 BASE_INPUT="/bsuhome/julialober/scratch/coherence_data/uavsar_geoslcs"
-OUTPUT_DIRECTORY="/bsuhome/julialober/scratch/coherence_data/coherence"
+OUTPUT_DIRECTORY="/bsuhome/julialober/scratch/coherence_data/uavsar_cohs"
 
 # 3. Build an array of all lowest-level flight directories
 #    Expected layout: BASE_INPUT/<site>/<flight>/
@@ -56,26 +48,15 @@ echo "Output Dir:     ${OUTPUT_DIRECTORY}"
 
 # 5. Choose a mode:
 #    - interferometric  (nearest-neighbor temporal pairs, same flight/pol/segment)
-#    - copol            (HV vs. VH cross-polarization pairs, same flight/date/segment)
-<<<<<<< HEAD
-MODE="interferometric"
+#    - crosspol            (HV vs. VH cross-polarization pairs, same flight/date/segment)
+MODE="crosspol"
 
 # 6. Set the square window size for the coherence averaging filter (default: 5)
 WINDOW_SIZE=5
 
 # 7. Optional polarization filter for interferometric mode (HH, HV, VH, VV).
 #    Leave empty ("") to process all polarizations.
-POLARIZATION=""
-=======
-MODE="copol"
-
-# 6. Set the square window size for the coherence averaging filter (default: 5)
-WINDOW_SIZE=13
-
-# 7. Optional polarization filter for interferometric mode (HH, HV, VH, VV).
-#    Leave empty ("") to process all polarizations.
-POLARIZATION="HH"
->>>>>>> a4838c7 (merge)
+POLARIZATION="VV"
 
 echo "Mode:           ${MODE}"
 echo "Window Size:    ${WINDOW_SIZE}"

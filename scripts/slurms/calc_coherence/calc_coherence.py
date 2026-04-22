@@ -23,10 +23,7 @@ import sys
 import re
 import logging
 import argparse
-<<<<<<< HEAD
-=======
 import itertools
->>>>>>> a4838c7 (merge)
 from collections import defaultdict
 from pathlib import Path
 
@@ -133,17 +130,10 @@ def run_interferometric(
         group_out_dir = Path(out_dir) / site / flight
         group_out_dir.mkdir(parents=True, exist_ok=True)
 
-<<<<<<< HEAD
-        for i in range(len(members) - 1):
-            f1, f2 = members[i], members[i + 1]
-            date1, date2 = f1["date"], f2["date"]
-
-=======
         for f1, f2 in itertools.combinations(members, 2):
             date1 = f1["date"]
             date2 = f2["date"]
                         
->>>>>>> a4838c7 (merge)
             # Prevent self-coherence (same date)
             if date1 == date2:
                 logger.warning(
@@ -153,7 +143,7 @@ def run_interferometric(
                 continue
 
             out_name = (
-                f"{site}_{flight}_{date1}_{date2}_{pol}_{segment}_int_coh.tif"
+                f"{site}_{flight}_{date1}_{date2}_{pol}_{segment}_w{window_size}_int_coh.tif"
             )
             out_path = group_out_dir / out_name
 
@@ -177,7 +167,7 @@ def run_interferometric(
                 )
 
 
-def run_copol(
+def run_crosspol(
     files: list[dict],
     out_dir: Path,
     window_size: int,
@@ -215,7 +205,7 @@ def run_copol(
         group_out_dir = Path(out_dir) / site / flight
         group_out_dir.mkdir(parents=True, exist_ok=True)
 
-        out_name = f"{site}_{flight}_{date}_HV-VH_{segment}_copol_coh.tif"
+        out_name = f"{site}_{flight}_{date}_HV-VH_{segment}_w{window_size}_crosspol_coh.tif"
         out_path = group_out_dir / out_name
 
         if out_path.exists():
@@ -264,9 +254,9 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["interferometric", "copol"],
+        choices=["interferometric", "crosspol"],
         required=True,
-        help="Coherence calculation mode: 'interferometric' or 'copol'.",
+        help="Coherence calculation mode: 'interferometric' or 'crosspol'.",
     )
     parser.add_argument(
         "--window_size",
@@ -322,7 +312,7 @@ def main() -> None:
     if args.mode == "interferometric":
         run_interferometric(parsed, out_dir, args.window_size, polarization=args.polarization)
     else:
-        run_copol(parsed, out_dir, args.window_size)
+        run_crosspol(parsed, out_dir, args.window_size)
 
     logger.info("Done.")
 
