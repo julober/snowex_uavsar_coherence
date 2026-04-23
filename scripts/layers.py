@@ -197,7 +197,7 @@ def assemble_data(
     logger.info("Tile: got DEM in %.3f seconds.", e - s)
 
     s = time.time()
-    topo = get_topo_layers(dem=dem, ref_grid=tile_ref)
+    topo = get_topo_layers(dem=dem, tile_ref_grid=tile_ref)
     e = time.time()
     logger.info("Tile: got topo layers: %s in %.3f seconds.", list(topo.keys()), e - s)
 
@@ -875,7 +875,7 @@ def get_snow_climatology(
 
 def get_topo_layers(
     dem: xr.DataArray,
-    ref_grid: Optional[Union[xr.DataArray, xr.Dataset]] = None,
+    tile_ref_grid: Optional[Union[xr.DataArray, xr.Dataset]] = None,
 ) -> xr.Dataset:
     """
     Derive topographic layers (slope, aspect, curvature) from a DEM.
@@ -889,8 +889,8 @@ def get_topo_layers(
     ----------
     dem:
         Digital Elevation Model as an :class:`xarray.DataArray`.
-    ref_grid:
-        Optional reference grid used to spatially align the output.
+    tile_ref_grid:
+        Optional reference grid for this tile used to spatially align the output.
 
     Returns
     -------
@@ -929,8 +929,8 @@ def get_topo_layers(
     ds['aspect'] = aspect_extrap.isel(y=slice(TOPO_PAD_PIXELS, -TOPO_PAD_PIXELS), x=slice(TOPO_PAD_PIXELS, -TOPO_PAD_PIXELS))
     ds['curve'] = curve_extrap.isel(y=slice(TOPO_PAD_PIXELS, -TOPO_PAD_PIXELS), x=slice(TOPO_PAD_PIXELS, -TOPO_PAD_PIXELS))
 
-    if ref_grid is not None:
-        ds = ds.rio.reproject_match(ref_grid)
+    if tile_ref_grid is not None:
+        ds = ds.rio.reproject_match(tile_ref_grid)
 
     return ds
 
