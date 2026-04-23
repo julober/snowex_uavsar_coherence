@@ -73,11 +73,13 @@ def plot_coherence_matrix(coh_matrix, dates=None):
     ax.set_xticks(range(len(dates_dt)))
     ax.set_yticks(range(len(dates_dt)))
     if dates is not None:
-        ax.set_xticklabels([d.strftime('%y/%m/%d') for d in dates_dt], rotation=90)
+        ax.set_xticklabels([d.strftime('%y/%m/%d') for d in dates_dt], rotation=45)
         ax.set_yticklabels([d.strftime('%y/%m/%d') for d in dates_dt])
     else:
         ax.set_xticklabels(dates_dt)
         ax.set_yticklabels(dates_dt)
+    
+    ax.grid(False)
 
     # Add colorbar
     cbar = fig.colorbar(cax)
@@ -86,4 +88,4 @@ def plot_coherence_matrix(coh_matrix, dates=None):
     plt.title('Coherence Matrix', fontsize=16)
     plt.xlabel('Dates', fontsize=14)
     plt.ylabel('Dates', fontsize=14)
-    plt.show()
+    return plt, ax
