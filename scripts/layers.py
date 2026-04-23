@@ -82,48 +82,38 @@ AORC_S3_BASE_URL: str = 'noaa-nws-aorc-v1-1-1km'
 
 
 def assemble_data(
-    aoi: Polygon,
+    tile_aoi: Polygon,
     date_pairs: List[Tuple[date, date]],
     flight_ids: List[str],
-    fp_dest: Optional[str],
     fp_coh: str = '../data/coherence/',
     fp_inc: str = '../data/inc_angle/',
     fp_snowclimate: str = '../data/NSIDC-0768/',
     crs: str = 'EPSG:4326',
     res: int = 30,
-    overwrite: bool = False,
 ) -> xr.Dataset:
     """
-    Assemble all data layers needed for the coherence model.
+    Fetch, align, and return all data layers for a single spatial tile.
 
-    Can handle all flights from a particular flight path. The caller is
-    responsible for ensuring that ``date_pairs`` corresponds to actual UAVSAR
-    acquisition dates.
+    This is a **pure function**: it reads from disk and remote APIs, aligns
+    everything to a reference grid derived from ``tile_aoi``, and returns the
+    merged in-memory :class:`xarray.Dataset`.  No data is written to disk.
+    Use :func:`assemble_data_largeaoi` to process a large master AOI by
+    splitting it into tiles and writing each tile to a Zarr store.
 
-    The resulting dataset is written to a ``.zarr`` store with the following
-    logical layout::
-
-        location_name/
-            static/
-            dynamic/
-                date1_date2/
-                date1_date3/
-                date2_date3/
-            .zmetadata
+    The caller is responsible for ensuring that ``date_pairs`` corresponds to
+    actual UAVSAR acquisition dates.
 
     Parameters
     ----------
-    aoi:
-        Area of interest as a Shapely Polygon in the coordinate system
+    tile_aoi:
+        Small spatial tile (a Shapely Polygon) representing the chunk of the
+        master extent to be processed.  Must be given in the coordinate system
         specified by ``crs``.
     date_pairs:
         List of ``(start_date, end_date)`` tuples defining the UAVSAR
         coherence intervals.
     flight_ids:
         List of UAVSAR flight-heading identifiers (e.g. ``['08508', '26505']``).
-    fp_dest:
-        Destination path for the output ``.zarr`` store.  Pass ``None`` to
-        skip writing to disk and only return the in-memory dataset.
     fp_coh:
         Directory containing per-flight coherence ``.tif`` files.
     fp_inc:
@@ -134,6 +124,169 @@ def assemble_data(
         Coordinate reference system string (default ``'EPSG:4326'``).
     res:
         Target spatial resolution in metres (default ``30``).
+
+    Returns
+    -------
+    xr.Dataset
+        Merged dataset containing all assembled data layers for this tile.
+    """
+
+    logger.info("Starting tile data assembly for flights %s", flight_ids)
+
+    # 1. Validate inputs
+    tile_aoi = validate_aoi(tile_aoi)
+    date_pairs = validate_date_pairs(date_pairs)
+    logger.debug("Tile AOI validated; %d date pairs provided", len(date_pairs))
+
+    # 2. Create tile reference grid
+    crs_obj = ProjCRS.from_user_input(crs)
+    if crs_obj.is_geographic:
+        # Convert the requested metric resolution to arc-degrees at ~45° latitude.
+        res_grid = res / METRES_PER_DEGREE_AT_45_LAT
+        tile_ref = make_reference_grid(aoi=tile_aoi, crs=crs, resolution=res_grid)
+    else:
+        # Projected CRS: resolution is already in metres.
+        wgs84 = ProjCRS('EPSG:4326')
+        res_grid = float(res)
+        tile_ref = make_reference_grid(aoi=tile_aoi, crs=crs, resolution=res_grid)
+        tile_aoi_proj = tile_aoi
+
+        # get tile_aoi in WGS84 for APIs
+        project = Transformer.from_crs(crs_obj, wgs84, always_xy=True).transform
+        tile_aoi = transform(project, tile_aoi_proj)
+        crs = 'EPSG:4326'
+
+    logger.debug("Tile reference grid created with resolution %g (CRS units)", res_grid)
+
+    # 3. Get UAVSAR coherence layers
+    s = time.time()
+    coh = get_uavsar_coherence(
+        tile_aoi=tile_aoi,
+        date_pairs=date_pairs,
+        flight_ids=flight_ids,
+        crs=crs,
+        tile_ref_grid=tile_ref,
+        fp=fp_coh,
+    )
+    e = time.time()
+    logger.info("Tile: loaded coherence for flights %s in %.3f seconds.", flight_ids, e - s)
+    logger.debug("Tile coherence dataset shape: %s", dict(coh.sizes))
+
+    # 4. Get incidence angle
+    s = time.time()
+    incidence = get_uavsar_incidence(
+        tile_aoi=tile_aoi,
+        flight_ids=flight_ids,
+        fp_inc=fp_inc,
+        tile_ref_grid=tile_ref,
+        crs=crs,
+    )
+    e = time.time()
+    logger.info("Tile: loaded incidence angles for flights %s in %.3f seconds.", flight_ids, e - s)
+
+    # 5. Get DEM
+    s = time.time()
+    try:
+        dem = py3dep.get_dem(geometry=tile_aoi, resolution=res, crs=crs)
+    except Exception as exc:
+        logger.error("py3dep.get_dem failed: %s", exc)
+        raise
+    dem.rio.write_crs(crs)
+    dem = dem.rio.reproject_match(tile_ref)
+    e = time.time()
+    logger.info("Tile: got DEM in %.3f seconds.", e - s)
+
+    s = time.time()
+    topo = get_topo_layers(dem=dem, ref_grid=tile_ref)
+    e = time.time()
+    logger.info("Tile: got topo layers: %s in %.3f seconds.", list(topo.keys()), e - s)
+
+    # 6. Get NLCD layers
+    s = time.time()
+    nlcd = get_nlcd_layers(tile_aoi=tile_aoi, crs=crs, tile_ref_grid=tile_ref)
+    e = time.time()
+    logger.info("Tile: got NLCD %s in %.3f seconds.", list(nlcd.keys()), e - s)
+
+    s = time.time()
+    snow_class = get_snow_climatology(tile_aoi=tile_aoi, crs=crs, fp=fp_snowclimate, tile_ref_grid=tile_ref)
+    e = time.time()
+    logger.info("Tile: got snow climatology: %s in %.3f seconds.", list(snow_class.keys()), e - s)
+
+    # 7. Get AORC meteorological layers
+    s = time.time()
+    aorc = get_aorc_layers(tile_aoi=tile_aoi, date_pairs=date_pairs, crs=crs, tile_ref_grid=tile_ref)
+    e = time.time()
+    logger.info("Tile: got AORC: %s in %.3f seconds.", list(aorc.keys()), e - s)
+
+    # 8. Get UCLA SWE/SD layers
+    s = time.time()
+    snow = get_snow_layers(tile_aoi=tile_aoi, date_pairs=date_pairs, crs=crs, tile_ref_grid=tile_ref)
+    e = time.time()
+    logger.info("Tile: got SWE layers: %s in %.3f seconds.", list(snow.keys()), e - s)
+
+    ds_list = [coh, incidence, dem, topo, nlcd, snow_class, snow, aorc]
+    validate_alignment(ds_list)
+    logger.debug("Tile: all layers validated for spatial alignment")
+
+    ds = xr.merge(ds_list, join='exact', compat='minimal')
+    logger.info("Tile: merged %d layers into a single dataset", len(ds_list))
+
+    # Fix OOM masking: use lazy .isnull() instead of .values which forces eager
+    # evaluation of the entire array into RAM.
+    nan_mask = ds['coherence'].isnull().any(dim=('flight_id', 'pair'))
+    for var in ds.data_vars:
+        if 'x' in ds[var].dims and 'y' in ds[var].dims:
+            ds[var] = ds[var].where(~nan_mask, drop=False)
+
+    return ds
+
+
+def assemble_data_largeaoi(
+    master_aoi: Polygon,
+    date_pairs: List[Tuple[date, date]],
+    flight_ids: List[str],
+    fp_dest: str,
+    fp_coh: str = '../data/coherence/',
+    fp_inc: str = '../data/inc_angle/',
+    fp_snowclimate: str = '../data/NSIDC-0768/',
+    crs: str = 'EPSG:4326',
+    res: int = 30,
+    tile_size_m: float = 5000.0,
+    overwrite: bool = False,
+) -> None:
+    """
+    Assemble all data layers for a large AOI using an out-of-core tile-by-tile
+    processing strategy to avoid out-of-memory (OOM) errors.
+
+    The master AOI is divided into a regular grid of smaller spatial tiles
+    (default 5 km × 5 km).  Each tile is processed independently by
+    :func:`assemble_data`, and the resulting in-memory dataset is appended to
+    a pre-initialised Zarr store via ``region``-based writes.
+
+    Parameters
+    ----------
+    master_aoi:
+        Full area of interest as a Shapely Polygon in the coordinate system
+        specified by ``crs``.
+    date_pairs:
+        List of ``(start_date, end_date)`` tuples defining the UAVSAR
+        coherence intervals.
+    flight_ids:
+        List of UAVSAR flight-heading identifiers (e.g. ``['08508', '26505']``).
+    fp_dest:
+        Destination path for the output ``.zarr`` store.
+    fp_coh:
+        Directory containing per-flight coherence ``.tif`` files.
+    fp_inc:
+        Directory containing pre-calculated incidence angle ``.tif`` files.
+    fp_snowclimate:
+        Directory containing the NSIDC-0768 snow-climatology NetCDF file.
+    crs:
+        Coordinate reference system string (default ``'EPSG:4326'``).
+    res:
+        Target spatial resolution in metres (default ``30``).
+    tile_size_m:
+        Side length of each square spatial tile in metres (default ``5000``).
     overwrite:
         When ``True`` an existing ``.zarr`` store at ``fp_dest`` is
         overwritten; when ``False`` the write will fail if the store already
@@ -141,155 +294,220 @@ def assemble_data(
 
     Returns
     -------
-    xr.Dataset
-        Merged dataset containing all assembled data layers.
+    None
+        Data is written directly to the Zarr store at ``fp_dest``.
     """
+    logger.info(
+        "Starting large-AOI data assembly for flights %s; tile_size_m=%.0f",
+        flight_ids, tile_size_m,
+    )
 
-    logger.info("Starting data assembly for flights %s", flight_ids)
-
-    # 1. Validate inputs
-    aoi = validate_aoi(aoi)
+    master_aoi = validate_aoi(master_aoi)
     date_pairs = validate_date_pairs(date_pairs)
-    aoi_gdf = gpd.GeoDataFrame(index=[0], crs=crs, geometry=[aoi])
-    logger.debug("AOI validated; %d date pairs provided", len(date_pairs))
 
-    # 2. Create reference grid
+    # Build a global reference grid covering the full master AOI.
     crs_obj = ProjCRS.from_user_input(crs)
     if crs_obj.is_geographic:
-        # Convert the requested metric resolution to arc-degrees at ~45° latitude.
         res_grid = res / METRES_PER_DEGREE_AT_45_LAT
-        ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_grid)
+        tile_size_deg = tile_size_m / METRES_PER_DEGREE_AT_45_LAT
     else:
-        # Projected CRS: resolution is already in metres.
-        wgs84 = ProjCRS('EPSG:4326')
         res_grid = float(res)
-        ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_grid)
-        aoi_proj = aoi 
+        tile_size_deg = tile_size_m  # already in CRS units (metres)
 
-        # get aoi in WGS84 for APIs
-        project = Transformer.from_crs(crs_obj, wgs84, always_xy=True).transform
-        aoi = transform(project, aoi_proj)
-        crs = 'EPSG:4326'
-
-    # ref = make_reference_grid(aoi=aoi, crs=crs, resolution=res_grid)
-    logger.debug("Reference grid created with resolution %g (CRS units)", res_grid)
-
-    # 3. Get UAVSAR coherence layers
-    s = time.time()
-    coh = get_uavsar_coherence(
-        aoi=aoi,
-        date_pairs=date_pairs,
-        flight_ids=flight_ids,
-        crs=crs,
-        ref_grid=ref,
-        fp=fp_coh,
+    global_ref = make_reference_grid(aoi=master_aoi, crs=crs, resolution=res_grid)
+    logger.debug(
+        "Global reference grid shape: %s", dict(global_ref.sizes)
     )
-    e = time.time()
-    logger.info("Loaded coherence for flights %s in %.3f seconds.", flight_ids, e - s)
-    logger.debug("Coherence dataset shape: %s", dict(coh.sizes))
 
-    # 4. Get incidence angle
-    s = time.time()
-    incidence = get_uavsar_incidence(
-        aoi=aoi,
-        flight_ids=flight_ids,
-        fp_inc=fp_inc,
-        ref_grid=ref,
+    # Split master_aoi into a regular grid of tiles.
+    minx, miny, maxx, maxy = master_aoi.bounds
+    x_starts = list(_frange(minx, maxx, tile_size_deg))
+    y_starts = list(_frange(miny, maxy, tile_size_deg))
+    total_tiles = len(x_starts) * len(y_starts)
+    logger.info(
+        "Split master AOI into %d tiles (%d cols × %d rows)",
+        total_tiles, len(x_starts), len(y_starts),
     )
-    e = time.time()
-    logger.info("Loaded incidence angles for flights %s in %.3f seconds.", flight_ids, e - s)
 
-    # 5. Get DEM
-    s = time.time()
-    try:
-        dem = py3dep.get_dem(geometry=aoi, resolution=res, crs=crs)
-    except Exception as exc:
-        logger.error("py3dep.get_dem failed: %s", exc)
-        raise
-    dem.rio.write_crs(crs)
-    dem = dem.rio.reproject_match(ref)
-    e = time.time()
-    logger.info("Got DEM in %.3f seconds.", e - s)
+    # Initialise an empty Zarr store sized to the global grid (no compute).
+    # We create a zero-filled template dataset with the correct structure by
+    # processing the first tile, then write an empty shell for the full extent.
+    logger.info("Initialising empty Zarr store at %s", fp_dest)
+    # Build a template using the global grid coordinates but zero-filled data.
+    # We defer the actual template creation to after the first tile is processed
+    # so that we know the exact data variables and dtypes.
+    _zarr_initialized = False
+    global_x = global_ref.coords['x'].values
+    global_y = global_ref.coords['y'].values
 
-    s = time.time()
-    topo = get_topo_layers(dem=dem, ref_grid=ref)
-    e = time.time()
-    logger.info("Got topo layers: %s in %.3f seconds.", list(topo.keys()), e - s)
+    tile_num = 0
+    for tile_y0 in y_starts:
+        tile_y1 = min(tile_y0 + tile_size_deg, maxy)
+        for tile_x0 in x_starts:
+            tile_x1 = min(tile_x0 + tile_size_deg, maxx)
+            tile_num += 1
 
-    # 6. Get NLCD layers
-    s = time.time()
-    nlcd = get_nlcd_layers(aoi=aoi, crs=crs, ref_grid=ref)
-    e = time.time()
-    logger.info("Got NLCD %s in %.3f seconds.", list(nlcd.keys()), e - s)
+            from shapely.geometry import box as shapely_box
+            tile_polygon = shapely_box(tile_x0, tile_y0, tile_x1, tile_y1)
 
-    s = time.time()
-    snow_class = get_snow_climatology(aoi=aoi, crs=crs, fp=fp_snowclimate, ref_grid=ref)
-    e = time.time()
-    logger.info("Got snow climatology: %s in %.3f seconds.", list(snow_class.keys()), e - s)
+            logger.info(
+                "Processing tile %d/%d: bounds=(%.4f, %.4f, %.4f, %.4f)",
+                tile_num, total_tiles, tile_x0, tile_y0, tile_x1, tile_y1,
+            )
 
-    # 7. Get AORC meteorological layers
-    s = time.time()
-    aorc = get_aorc_layers(aoi=aoi, date_pairs=date_pairs, crs=crs, ref_grid=ref)
-    e = time.time()
-    logger.info("Got AORC: %s in %.3f seconds.", list(aorc.keys()), e - s)
+            try:
+                tile_ds = assemble_data(
+                    tile_aoi=tile_polygon,
+                    date_pairs=date_pairs,
+                    flight_ids=flight_ids,
+                    fp_coh=fp_coh,
+                    fp_inc=fp_inc,
+                    fp_snowclimate=fp_snowclimate,
+                    crs=crs,
+                    res=res,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Tile %d/%d failed: %s – skipping.", tile_num, total_tiles, exc
+                )
+                continue
 
-    # 8. Get UCLA SWE/SD layers
-    s = time.time()
-    snow = get_snow_layers(aoi=aoi, date_pairs=date_pairs, crs=crs, ref_grid=ref)
-    e = time.time()
-    logger.info("Got SWE layers: %s in %.3f seconds.", list(snow.keys()), e - s)
+            # Initialise the global Zarr store using the first successfully
+            # processed tile as a structural template.
+            if not _zarr_initialized:
+                logger.info("Initialising Zarr store structure from first tile")
+                template_ds = _build_global_template(tile_ds, global_x, global_y)
 
-    ds_list = [coh, incidence, dem, topo, nlcd, snow_class, snow, aorc]
-    validate_alignment(ds_list)
-    logger.debug("All layers validated for spatial alignment")
+                # Clear stale encoding before writing.
+                for var in template_ds.variables:
+                    template_ds[var].encoding.pop('chunks', None)
+                    template_ds[var].encoding.pop('preferred_chunks', None)
 
-    ds = xr.merge(ds_list, join='exact', compat='minimal')
-    logger.info("Merged %d layers into a single dataset", len(ds_list))
+                chunk_dict = {
+                    'pair': -1,
+                    'y': SPATIAL_CHUNK_SIZE,
+                    'x': SPATIAL_CHUNK_SIZE,
+                }
+                template_ds = template_ds.chunk(chunk_dict)
 
-    nan_mask = np.isnan(ds['coherence'].values).any(axis=(0,1))
-    for var in ds.data_vars:
-        if 'x' in ds[var].dims and 'y' in ds[var].dims:
-            ds[var] = ds[var].where(~nan_mask, drop=False)
+                zarr_mode = 'w' if overwrite else 'w-'
+                template_ds.to_zarr(fp_dest, mode=zarr_mode, consolidated=True, compute=False)
+                logger.info("Empty Zarr store initialised at %s", fp_dest)
+                _zarr_initialized = True
 
-    # Clear original chunking metadata so to_zarr() does not try to reuse
-    # stale chunk information and crash.
-    for var in ds.variables:
-        ds[var].encoding.pop('chunks', None)
-        ds[var].encoding.pop('preferred_chunks', None)
+            # Compute integer slice indices for this tile within the global grid.
+            tile_x_vals = tile_ds.coords['x'].values
+            tile_y_vals = tile_ds.coords['y'].values
 
-    # Define a spatial-only chunking strategy.
-    # Using -1 tells Dask to NOT chunk that dimension (keep it as one block).
-    chunk_dict = {
-        'pair': -1,                  # Keep the entire time series together
-        'y': SPATIAL_CHUNK_SIZE,     # Chunk spatially
-        'x': SPATIAL_CHUNK_SIZE,
-    }
+            x_start_idx = int(np.searchsorted(global_x, tile_x_vals[0]))
+            x_end_idx = x_start_idx + len(tile_x_vals)
+            # global_y is descending (north→south), so we search in reversed order.
+            y_start_idx = int(np.searchsorted(-global_y, -tile_y_vals[0]))
+            y_end_idx = y_start_idx + len(tile_y_vals)
 
-    ds_chunked = ds.chunk(chunk_dict)
+            region = {
+                'x': slice(x_start_idx, x_end_idx),
+                'y': slice(y_start_idx, y_end_idx),
+            }
 
-    if fp_dest is not None:
-        if overwrite:
-            ds_chunked.to_zarr(fp_dest, mode='w', consolidated=True)
-        else:
-            ds_chunked.to_zarr(fp_dest, mode='w-', consolidated=True)
-        logger.info("Dataset written to %s", fp_dest)
-    
-    return ds
+            # Clear encoding before region write.
+            for var in tile_ds.variables:
+                tile_ds[var].encoding.pop('chunks', None)
+                tile_ds[var].encoding.pop('preferred_chunks', None)
+
+            tile_ds.to_zarr(fp_dest, region=region)
+            logger.info(
+                "Tile %d/%d written to Zarr (x=%d:%d, y=%d:%d)",
+                tile_num, total_tiles,
+                x_start_idx, x_end_idx,
+                y_start_idx, y_end_idx,
+            )
+
+    logger.info("Large-AOI assembly complete. Output written to %s", fp_dest)
+
+
+def _frange(start: float, stop: float, step: float):
+    """Yield float values from *start* to *stop* (exclusive) in increments of *step*."""
+    val = start
+    while val < stop:
+        yield val
+        val += step
+
+
+def _build_global_template(tile_ds: xr.Dataset, global_x: np.ndarray, global_y: np.ndarray) -> xr.Dataset:
+    """
+    Build a zero-filled global-extent template dataset matching the structure of *tile_ds*.
+
+    The template has the same data variables, dtypes, and non-spatial coordinates
+    as *tile_ds*, but the ``x`` and ``y`` dimensions are replaced with the full
+    global coordinate arrays.
+
+    Parameters
+    ----------
+    tile_ds:
+        A representative tile dataset whose structure (variables, dtypes, extra
+        dimensions such as ``pair`` and ``flight_id``) defines the template.
+    global_x:
+        1-D array of global x-coordinates (ascending).
+    global_y:
+        1-D array of global y-coordinates (descending, north→south).
+
+    Returns
+    -------
+    xr.Dataset
+        Zero-filled dataset with global spatial extent.
+    """
+    ny = len(global_y)
+    nx = len(global_x)
+    template_vars: dict = {}
+
+    for var in tile_ds.data_vars:
+        da = tile_ds[var]
+        # Build the new shape by replacing y/x sizes with global sizes.
+        new_dims = []
+        new_coords: dict = {}
+        new_shape = []
+
+        for dim in da.dims:
+            if dim == 'y':
+                new_dims.append('y')
+                new_coords['y'] = global_y
+                new_shape.append(ny)
+            elif dim == 'x':
+                new_dims.append('x')
+                new_coords['x'] = global_x
+                new_shape.append(nx)
+            else:
+                new_dims.append(dim)
+                new_coords[dim] = da.coords[dim].values
+                new_shape.append(da.sizes[dim])
+
+        template_data = np.zeros(new_shape, dtype=da.dtype)
+        template_vars[var] = xr.DataArray(
+            template_data,
+            dims=new_dims,
+            coords=new_coords,
+            attrs=da.attrs,
+        )
+
+    return xr.Dataset(template_vars)
 
 
 def get_uavsar_coherence(
-    aoi: Polygon,
+    tile_aoi: Polygon,
     date_pairs: List[Tuple[date, date]],
     flight_ids: List[str],
     crs: str,
-    ref_grid: Union[xr.DataArray, xr.Dataset],
+    tile_ref_grid: Union[xr.DataArray, xr.Dataset],
     fp: str = '../data/coherence/',
 ) -> xr.Dataset:
     """
     Load UAVSAR coherence files and assemble a 4-D cube ``(flight_id, pair, y, x)``.
 
-    Files are read from flight-specific sub-directories under ``fp`` and are
-    aligned to ``ref_grid`` before concatenation.
+    Files are read from flight-specific sub-directories under ``fp``.  Before
+    reprojection, each raster is sliced to the bounding box of ``tile_aoi``
+    in the raster's native CRS to avoid loading the entire file into memory.
+    The sliced array is then aligned to ``tile_ref_grid``.
 
     Expected file structure::
 
@@ -297,17 +515,18 @@ def get_uavsar_coherence(
 
     Parameters
     ----------
-    aoi:
-        Area of interest as a Shapely Polygon.
+    tile_aoi:
+        Spatial tile as a Shapely Polygon (a small chunk of the master extent).
+        Must be in the CRS given by ``crs``.
     date_pairs:
         List of ``(start_date, end_date)`` tuples defining the coherence
         intervals.
     flight_ids:
         List of UAVSAR flight-heading identifiers.
     crs:
-        Coordinate reference system string (e.g. ``'EPSG:4326'``).
-    ref_grid:
-        Reference grid used to spatially align all arrays.
+        Coordinate reference system string of ``tile_aoi`` (e.g. ``'EPSG:4326'``).
+    tile_ref_grid:
+        Reference grid for this tile used to spatially align all arrays.
     fp:
         Root directory that contains per-flight sub-directories.
 
@@ -361,13 +580,40 @@ def get_uavsar_coherence(
             file_path = found_files[0]
             logger.debug("Found coherence file: %s", file_path)
 
-            # Load raster, write CRS, and rename the data variable.
+            # Load raster lazily, write CRS, and rename the data variable.
             da = xr.open_dataset(file_path, chunks={})
             da.rio.write_crs(crs, inplace=True)
             da = da.rename({list(da.data_vars.keys())[0]: 'coherence'})
 
-            # Align to the master reference grid.
-            da_matched = da.rio.reproject_match(ref_grid)
+            # Pre-clip to the tile bounding box in the raster's native CRS
+            # before calling reproject_match to avoid reading the full raster.
+            # Guard: skip pre-clipping when tile_aoi is None (e.g. testing
+            # without a spatial filter) or when the native CRS cannot be
+            # resolved (e.g. mocked in tests).
+            if tile_aoi is not None:
+                try:
+                    native_crs = ProjCRS.from_user_input(da.rio.crs)
+                    tile_aoi_native = gpd.GeoSeries([tile_aoi], crs=crs).to_crs(
+                        native_crs.to_epsg() or native_crs.to_wkt()
+                    )
+                    minx, miny, maxx, maxy = tile_aoi_native.total_bounds
+
+                    # Handle both ascending and descending y-axes.
+                    y_vals = da.coords['y'].values
+                    if len(y_vals) >= 2 and y_vals[0] > y_vals[-1]:
+                        # Descending y (north→south): slice maxy first, miny last.
+                        da = da.sel(x=slice(minx, maxx), y=slice(maxy, miny))
+                    else:
+                        # Ascending y (south→north).
+                        da = da.sel(x=slice(minx, maxx), y=slice(miny, maxy))
+                except Exception as exc:
+                    logger.debug(
+                        "Native-CRS pre-clip skipped for coherence file %s: %s",
+                        file_path, exc,
+                    )
+
+            # Align to the tile reference grid.
+            da_matched = da.rio.reproject_match(tile_ref_grid)
 
             pair_arrays.append(da_matched)
 
@@ -391,30 +637,34 @@ def get_uavsar_coherence(
 
 
 def get_uavsar_incidence(
-    aoi: Polygon,
+    tile_aoi: Polygon,
     flight_ids: List[str],
     fp_inc: Union[str, Path],
-    ref_grid: Union[xr.DataArray, xr.Dataset],
+    tile_ref_grid: Union[xr.DataArray, xr.Dataset],
     crs: str = 'EPSG:4326',
 ) -> xr.DataArray:
     """
     Load pre-calculated UAVSAR incidence angle files and concatenate them along
     a ``flight_id`` dimension.
 
+    Before reprojection, each raster is sliced to the bounding box of
+    ``tile_aoi`` projected into the raster's native CRS.  This avoids reading
+    the entire raster into memory.
+
     Parameters
     ----------
-    aoi:
-        Area of interest as a Shapely Polygon used to spatially subset the
-        incidence angle rasters before reprojection.
+    tile_aoi:
+        Spatial tile as a Shapely Polygon (a small chunk of the master extent).
+        Must be in the CRS given by ``crs``.
     flight_ids:
         List of UAVSAR flight-heading identifiers (e.g. ``['08508', '26505']``).
     fp_inc:
         Directory containing the pre-calculated incidence angle ``.tif`` files.
         Files are matched using the pattern ``*{flight_id}*s2.inc.tif``.
-    ref_grid:
-        Reference grid used to spatially align all arrays.
+    tile_ref_grid:
+        Reference grid for this tile used to spatially align all arrays.
     crs:
-        Coordinate reference system string (default ``'EPSG:4326'``).
+        Coordinate reference system string of ``tile_aoi`` (default ``'EPSG:4326'``).
 
     Returns
     -------
@@ -445,15 +695,36 @@ def get_uavsar_incidence(
 
         # Load the file; masked=True converts nodata/fill values to np.nan.
         da = rxa.open_rasterio(file_path, masked=True).squeeze()
-        # Derive bounds in the same CRS as the raster (assumed to match `crs`).
-        minx, miny, maxx, maxy = gpd.GeoSeries([aoi], crs=crs).total_bounds
-        da = da.sel(x=slice(minx, maxx), y=slice(maxy, miny))
+
+        # Pre-clip to the tile bounding box in the raster's native CRS to
+        # avoid reading the full file into memory before reprojection.
+        # Falls back gracefully if the native CRS cannot be resolved.
+        try:
+            native_crs = ProjCRS.from_user_input(da.rio.crs)
+            tile_aoi_native = gpd.GeoSeries([tile_aoi], crs=crs).to_crs(
+                native_crs.to_epsg() or native_crs.to_wkt()
+            )
+            minx, miny, maxx, maxy = tile_aoi_native.total_bounds
+
+            # Handle both ascending and descending y-axes.
+            y_vals = da.coords['y'].values
+            if len(y_vals) >= 2 and y_vals[0] > y_vals[-1]:
+                # Descending y (north→south): slice maxy first, miny last.
+                da = da.sel(x=slice(minx, maxx), y=slice(maxy, miny))
+            else:
+                # Ascending y (south→north).
+                da = da.sel(x=slice(minx, maxx), y=slice(miny, maxy))
+        except Exception as exc:
+            logger.debug(
+                "Native-CRS pre-clip skipped for incidence file %s: %s",
+                file_path, exc,
+            )
 
         # Write CRS before reprojecting.
         da.rio.write_crs(crs, inplace=True)
 
-        # Align to the reference grid.
-        da_matched = da.rio.reproject_match(ref_grid)
+        # Align to the tile reference grid.
+        da_matched = da.rio.reproject_match(tile_ref_grid)
 
         da_matched.name = 'incidence_angle'
 
@@ -474,34 +745,38 @@ def get_uavsar_incidence(
 # =============================================================================
 
 def get_nlcd_layers(
-    aoi: Polygon,
+    tile_aoi: Polygon,
     crs: str,
     years: Dict[str, List[int]] = {'cover': [2019], 'canopy': [2019]},
-    ref_grid: Optional[Union[xr.DataArray, xr.Dataset]] = None,
+    tile_ref_grid: Optional[Union[xr.DataArray, xr.Dataset]] = None,
 ) -> xr.Dataset:
     """
-    Retrieve National Land Cover Database (NLCD) layers for the given AOI.
+    Retrieve National Land Cover Database (NLCD) layers for the given tile AOI.
+
+    The NLCD API is queried only for the extent of ``tile_aoi``, ensuring that
+    only tile-relevant data is transferred over the network.
 
     Parameters
     ----------
-    aoi:
-        Area of interest as a Shapely Polygon.
+    tile_aoi:
+        Spatial tile as a Shapely Polygon (a small chunk of the master extent).
+        Must be in the CRS given by ``crs``.
     crs:
-        Coordinate reference system of ``aoi``.
+        Coordinate reference system of ``tile_aoi``.
     years:
         Dictionary specifying which NLCD layers and years to download.
         Default is ``{'cover': [2019], 'canopy': [2019]}``.
-    ref_grid:
-        Optional reference grid used to spatially align the output.
+    tile_ref_grid:
+        Optional reference grid for this tile used to spatially align the output.
 
     Returns
     -------
     xr.Dataset
-        Dataset of NLCD layers aligned to ``ref_grid`` (when provided).
+        Dataset of NLCD layers aligned to ``tile_ref_grid`` (when provided).
     """
     logger.debug("Fetching NLCD layers for years: %s", years)
 
-    g = gpd.GeoSeries([aoi], crs=crs)
+    g = gpd.GeoSeries([tile_aoi], crs=crs)
 
     try:
         ds = gh.nlcd_bygeom(geometry=g, years=years)[0]
@@ -509,42 +784,46 @@ def get_nlcd_layers(
         logger.error("Failed to fetch NLCD data from pygeohydro: %s", exc)
         raise
 
-    if ref_grid is not None:
-        ds = ds.rio.reproject_match(ref_grid)
+    if tile_ref_grid is not None:
+        ds = ds.rio.reproject_match(tile_ref_grid)
 
     return ds
 
 def get_snow_climatology(
-    aoi: Polygon,
+    tile_aoi: Polygon,
     crs: str,
     fp: str,
-    ref_grid: Optional[Union[xr.DataArray, xr.Dataset]] = None,
+    tile_ref_grid: Optional[Union[xr.DataArray, xr.Dataset]] = None,
 ) -> xr.Dataset:
     """
-    Load the NSIDC-0768 seasonal snow classification dataset for the AOI.
+    Load the NSIDC-0768 seasonal snow classification dataset for the tile AOI.
 
     The expected NetCDF file is
     ``SnowClass_NA_300m_10.0arcsec_2021_v01.0.nc``, which must be placed
     directly under ``fp``.  Download instructions are available at
     https://daacdata.apps.nsidc.org/pub/DATASETS/nsidc0768_global_seasonal_snow_classification_v01/.
 
+    The dataset is pre-clipped to the bounding box of ``tile_aoi`` before any
+    reprojection to avoid loading the full continental dataset into memory.
+
     Parameters
     ----------
-    aoi:
-        Area of interest as a Shapely Polygon.
+    tile_aoi:
+        Spatial tile as a Shapely Polygon (a small chunk of the master extent).
+        Must be in the CRS given by ``crs``.
     crs:
-        Coordinate reference system of ``aoi``.
+        Coordinate reference system of ``tile_aoi``.
     fp:
         Directory containing the snow-climatology NetCDF file.
-    ref_grid:
-        Optional reference grid used to spatially align the output.  When
-        ``None`` the dataset is clipped directly to ``aoi``.
+    tile_ref_grid:
+        Optional reference grid for this tile used to spatially align the output.
+        When ``None`` the dataset is clipped directly to ``tile_aoi``.
 
     Returns
     -------
     xr.Dataset
         Dataset containing the ``snow_class`` variable, aligned to
-        ``ref_grid`` (when provided).
+        ``tile_ref_grid`` (when provided).
 
     Raises
     ------
@@ -572,12 +851,12 @@ def get_snow_climatology(
     ds = ds.rename({'lat': 'y', 'lon': 'x', 'SnowClass': 'snow_class'})
     ds = ds.sortby(['x', 'y'])
 
-    # The climatology dataset is always in EPSG:4326; project the AOI bounds
+    # The climatology dataset is always in EPSG:4326; project the tile AOI bounds
     # to 4326 for slicing, regardless of the input ``crs``.
-    g = gpd.GeoSeries([aoi], crs=crs).to_crs('EPSG:4326').total_bounds
+    g = gpd.GeoSeries([tile_aoi], crs=crs).to_crs('EPSG:4326').total_bounds
     minx, miny, maxx, maxy = g
     logger.debug(
-        "Clipping snow climatology to AOI bounds: %.4f, %.4f, %.4f, %.4f",
+        "Clipping snow climatology to tile AOI bounds: %.4f, %.4f, %.4f, %.4f",
         minx, miny, maxx, maxy,
     )
 
@@ -585,10 +864,10 @@ def get_snow_climatology(
 
     ds = ds.rio.write_crs('EPSG:4326')
 
-    if ref_grid is not None:
-        ds = ds.rio.reproject_match(ref_grid)
+    if tile_ref_grid is not None:
+        ds = ds.rio.reproject_match(tile_ref_grid)
     else:
-        g = gpd.GeoSeries([aoi], crs=crs)
+        g = gpd.GeoSeries([tile_aoi], crs=crs)
         ds = ds.rio.clip(g, crs=crs)
 
     return ds
@@ -657,43 +936,45 @@ def get_topo_layers(
 
 
 def get_snow_layers(
-    aoi: Polygon,
+    tile_aoi: Polygon,
     crs: str,
     date_pairs: List[Tuple[date, date]],
     metrics: Union[str, List[str]] = 'all',
-    ref_grid: Optional[Union[xr.DataArray, xr.Dataset]] = None,
+    tile_ref_grid: Optional[Union[xr.DataArray, xr.Dataset]] = None,
 ) -> xr.Dataset:
     """
-    Retrieve UCLA Western US snow reanalysis (WUS_UCLA_SR) layers for the AOI.
+    Retrieve UCLA Western US snow reanalysis (WUS_UCLA_SR) layers for the tile AOI.
 
     SWE and snow-depth granules are searched via the Earthaccess API,
     processed into time series, and summarised into per-date-pair metrics.
+    Only the spatial extent of ``tile_aoi`` is requested from the API.
 
     Parameters
     ----------
-    aoi:
-        Area of interest as a Shapely Polygon.
+    tile_aoi:
+        Spatial tile as a Shapely Polygon (a small chunk of the master extent).
+        Must be in the CRS given by ``crs``.
     crs:
-        Coordinate reference system of ``aoi``.
+        Coordinate reference system of ``tile_aoi``.
     date_pairs:
         List of ``(start_date, end_date)`` tuples defining the intervals
         for which snow metrics are computed.
     metrics:
         Either ``'all'`` or a list of metric names accepted by
         :func:`get_snow_metrics`.
-    ref_grid:
-        Optional reference grid used to spatially align the output.
+    tile_ref_grid:
+        Optional reference grid for this tile used to spatially align the output.
 
     Returns
     -------
     xr.Dataset
         Dataset of snow metrics indexed by a ``pair`` coordinate.
     """
-    xx, yy = aoi.exterior.coords.xy
+    xx, yy = tile_aoi.exterior.coords.xy
     x = xx.tolist()
     y = yy.tolist()
 
-    g = gpd.GeoSeries([aoi], crs=crs)
+    g = gpd.GeoSeries([tile_aoi], crs=crs)
 
     years = get_years(date_pairs)
     logger.debug("Searching WUS_UCLA_SR granules for years: %s", years)
@@ -777,8 +1058,8 @@ def get_snow_layers(
 
     ds = xr.concat(ds_list, dim='pair')
     ds = ds.sortby('pair')
-    if ref_grid is not None:
-        ds = ds.rio.reproject_match(ref_grid)
+    if tile_ref_grid is not None:
+        ds = ds.rio.reproject_match(tile_ref_grid)
     return ds
 
 
@@ -958,29 +1239,31 @@ def process_ucla_granule(file_obj) -> xr.Dataset:
 
 
 def get_aorc_layers(
-    aoi: Polygon,
+    tile_aoi: Polygon,
     date_pairs: List[Tuple[date, date]],
     crs: str,
-    ref_grid: Optional[Union[xr.DataArray, xr.Dataset]] = None,
+    tile_ref_grid: Optional[Union[xr.DataArray, xr.Dataset]] = None,
     metrics: Union[str, List[str]] = 'all',
 ) -> xr.Dataset:
     """
     Retrieve AORC (Analysis of Record for Calibration) meteorological layers.
 
     Data are read directly from the NOAA public S3 bucket and summarised into
-    per-date-pair metrics using :func:`get_aorc_metrics`.
+    per-date-pair metrics using :func:`get_aorc_metrics`.  Only the spatial
+    extent of ``tile_aoi`` is clipped from the remote store.
 
     Parameters
     ----------
-    aoi:
-        Area of interest as a Shapely Polygon.
+    tile_aoi:
+        Spatial tile as a Shapely Polygon (a small chunk of the master extent).
+        Must be in the CRS given by ``crs``.
     date_pairs:
         List of ``(start_date, end_date)`` tuples defining the intervals
         for which AORC metrics are computed.
     crs:
-        Coordinate reference system of ``aoi``.
-    ref_grid:
-        Optional reference grid used to spatially align the output.
+        Coordinate reference system of ``tile_aoi``.
+    tile_ref_grid:
+        Optional reference grid for this tile used to spatially align the output.
     metrics:
         Either ``'all'`` or a list of metric names accepted by
         :func:`get_aorc_metrics`.
@@ -991,7 +1274,7 @@ def get_aorc_layers(
         Dataset of AORC metrics indexed by a ``pair`` coordinate.
     """
     years = get_years(date_pairs)
-    g = gpd.GeoSeries([aoi], crs=crs)
+    g = gpd.GeoSeries([tile_aoi], crs=crs)
     logger.debug("Opening AORC zarr stores for years: %s", years)
 
     s3_out = s3fs.S3FileSystem(anon=True)
@@ -1008,7 +1291,7 @@ def get_aorc_layers(
         )
         raise
 
-    # Clip to the AOI and rename spatial dimensions.
+    # Clip to the tile AOI and rename spatial dimensions.
     ds_clip = ds_full.rio.clip(g.geometry.values, crs=crs)
     ds_clip = ds_clip.rename({'latitude': 'y', 'longitude': 'x'})
 
@@ -1033,8 +1316,8 @@ def get_aorc_layers(
     ds = xr.concat(ds_list, dim='pair')
     ds = ds.sortby('pair')
 
-    if ref_grid is not None:
-        ds = ds.rio.reproject_match(ref_grid)
+    if tile_ref_grid is not None:
+        ds = ds.rio.reproject_match(tile_ref_grid)
     return ds
 
 def get_aorc_metrics(
