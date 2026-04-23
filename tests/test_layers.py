@@ -37,6 +37,7 @@ import xarray as xr
 # and stubbed the heavy third-party imports, so the import below will succeed.
 from layers import (  # noqa: E402 (post-path-setup import)
     assemble_data,
+    assemble_data_largeaoi,
     get_uavsar_coherence,
     get_uavsar_incidence,
     get_years,
@@ -138,11 +139,11 @@ class TestGetUavsarCoherence:
                 ds_rio.reproject_match = MagicMock(return_value=renamed)
 
                 result = get_uavsar_coherence(
-                    aoi=None,
+                    tile_aoi=None,
                     date_pairs=date_pairs,
                     flight_ids=flight_ids,
                     crs="EPSG:4326",
-                    ref_grid=ref_grid,
+                    tile_ref_grid=ref_grid,
                     fp=str(tmp_path),
                 )
 
@@ -152,11 +153,11 @@ class TestGetUavsarCoherence:
         """A missing flight directory must raise ``FileNotFoundError``."""
         with pytest.raises(FileNotFoundError, match="Flight directory not found"):
             get_uavsar_coherence(
-                aoi=None,
+                tile_aoi=None,
                 date_pairs=date_pairs,
                 flight_ids=flight_ids,
                 crs="EPSG:4326",
-                ref_grid=ref_grid,
+                tile_ref_grid=ref_grid,
                 fp=str(tmp_path),  # no sub-directories created
             )
 
@@ -167,11 +168,11 @@ class TestGetUavsarCoherence:
 
         with pytest.raises(FileNotFoundError, match="Could not find coherence file"):
             get_uavsar_coherence(
-                aoi=None,
+                tile_aoi=None,
                 date_pairs=date_pairs,
                 flight_ids=flight_ids,
                 crs="EPSG:4326",
-                ref_grid=ref_grid,
+                tile_ref_grid=ref_grid,
                 fp=str(tmp_path),
             )
 
@@ -252,10 +253,10 @@ class TestGetUavsarIncidence:
                 da_rio.reproject_match = MagicMock(return_value=squeezed)
 
                 result = get_uavsar_incidence(
-                    aoi=aoi,
+                    tile_aoi=aoi,
                     flight_ids=flight_ids,
                     fp_inc=str(tmp_path),
-                    ref_grid=ref_grid,
+                    tile_ref_grid=ref_grid,
                     crs="EPSG:4326",
                 )
 
@@ -265,10 +266,10 @@ class TestGetUavsarIncidence:
         """A missing incidence file must raise ``FileNotFoundError``."""
         with pytest.raises(FileNotFoundError, match="Could not find pre-calculated incidence file"):
             get_uavsar_incidence(
-                aoi=aoi,
+                tile_aoi=aoi,
                 flight_ids=flight_ids,
                 fp_inc=str(tmp_path),  # no files created
-                ref_grid=ref_grid,
+                tile_ref_grid=ref_grid,
                 crs="EPSG:4326",
             )
 
