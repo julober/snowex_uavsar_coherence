@@ -415,7 +415,17 @@ def assemble_data_largeaoi(
                 tile_ds[var].encoding.pop('chunks', None)
                 tile_ds[var].encoding.pop('preferred_chunks', None)
 
-            tile_ds.to_zarr(fp_dest, region=region)
+            # Drop purely non-spatial 1-D dimension coordinates (e.g., 'flight_id',
+            # 'pair').  These variables have no x/y dimension, so zarr region writes
+            # require them to be absent.  They were already written into the global
+            # template during store initialisation and do not change between tiles.
+            _spatial_dims = {'x', 'y'}
+            _coords_to_drop = [
+                c for c in tile_ds.coords
+                if set(tile_ds[c].dims).isdisjoint(_spatial_dims)
+            ]
+            tile_ds_for_write = tile_ds.drop_vars(_coords_to_drop)
+            tile_ds_for_write.to_zarr(fp_dest, region=region)
             logger.info(
                 "Tile %d/%d written to Zarr (x=%d:%d, y=%d:%d)",
                 tile_num, total_tiles,
