@@ -28,7 +28,10 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+import rasterio
 import xarray as xr
+from rasterio.crs import CRS as RioCRS
+from rasterio.transform import from_bounds
 from shapely.geometry import box
 
 # ---------------------------------------------------------------------------
@@ -358,3 +361,66 @@ def dirty_snow_ds(clean_snow_ds) -> xr.Dataset:
 def dirty_aorc_ds(clean_aorc_ds) -> xr.Dataset:
     """AORC Dataset with dirty CRS artefacts."""
     return _add_dirty_crs(clean_aorc_ds, coord_name="spatial_ref")
+
+
+# ---------------------------------------------------------------------------
+# Fixtures for tile-by-tile / out-of-core architecture tests
+# ---------------------------------------------------------------------------
+
+# The tile_aoi fixture re-uses the existing `aoi` fixture (box(-120, 38, -119.9, 38.1)).
+
+@pytest.fixture()
+def tile_ref_grid() -> xr.DataArray:
+    """
+    5 × 5 tile reference grid with EPSG:4326 CRS written, covering the tile_aoi.
+
+    Unlike the plain ``ref_grid`` fixture, this one carries a proper CRS so that
+    ``rio.reproject_match`` can use it as a target.
+    """
+    da = _make_spatial_da("tile_ref", value=0.0)
+    return da.rio.write_crs("EPSG:4326")
+
+
+@pytest.fixture()
+def larger_tif_dir(tmp_path, flight_ids, date_pairs) -> Path:
+    """
+    Create per-flight directories with coherence ``.tif`` files whose spatial
+    extent is *larger* than the tile_aoi.
+
+    The tiles are 30 × 30 pixels covering ``(-120.1, 37.9, -119.8, 38.2)``
+    while the tile_aoi covers only ``(-120.0, 38.0, -119.9, 38.1)``.  This
+    allows the pre-clipping logic in ``get_uavsar_coherence`` to be exercised:
+    after ``da.sel(...)`` the raster should be reduced from 30×30 to a smaller
+    subset before ``reproject_match`` is called.
+    """
+    # Raster extent is intentionally larger than tile_aoi in all directions.
+    tif_minx, tif_miny, tif_maxx, tif_maxy = -120.1, 37.9, -119.8, 38.2
+    ny, nx = 30, 30
+
+    raster_transform = from_bounds(tif_minx, tif_miny, tif_maxx, tif_maxy, nx, ny)
+
+    for fid in flight_ids:
+        fdir = tmp_path / str(fid)
+        fdir.mkdir(parents=True, exist_ok=True)
+        for s, e in date_pairs:
+            fname = (
+                f"uavsar_{fid}_"
+                f"{s.strftime('%y%m%d')}_{e.strftime('%y%m%d')}"
+                ".coh.tif"
+            )
+            fpath = fdir / fname
+            data = np.random.rand(1, ny, nx).astype(np.float32)
+            with rasterio.open(
+                str(fpath),
+                "w",
+                driver="GTiff",
+                height=ny,
+                width=nx,
+                count=1,
+                dtype="float32",
+                crs=RioCRS.from_epsg(4326),
+                transform=raster_transform,
+            ) as dst:
+                dst.write(data)
+
+    return tmp_path
