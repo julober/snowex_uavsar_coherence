@@ -32,6 +32,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 import xarray as xr
+from shapely.geometry import box
 
 # ---------------------------------------------------------------------------
 # Mirror the coordinate constants defined in conftest.py so that the new test
@@ -46,6 +47,7 @@ _Y_COORDS = np.linspace(38.1, 38.0, _NY)  # descending (north → south)
 # The conftest.py already inserted the repo root and scripts/ into sys.path
 # and stubbed the heavy third-party imports, so the import below will succeed.
 from layers import (  # noqa: E402 (post-path-setup import)
+    METRES_PER_DEGREE_AT_45_LAT,
     assemble_data,
     assemble_data_largeaoi,
     get_uavsar_coherence,
@@ -338,24 +340,22 @@ class TestPreClippingGetUavsarCoherence:
     * the final **output** spatial dimensions equal those of ``tile_ref_grid``.
     """
 
-    def _make_tile_sized_coh(self, date_pairs, flight_ids, tile_ref_grid):
-        """Return a coherence Dataset aligned to ``tile_ref_grid``."""
-        pair_labels = [
-            f"{s.strftime('%y%m%d')}_{e.strftime('%y%m%d')}"
-            for s, e in date_pairs
-        ]
+    def _make_single_pair_ds(self, tile_ref_grid):
+        """
+        Return a single 2-D (y × x) coherence Dataset that mirrors what
+        ``reproject_match`` produces for **one (flight, pair)** call.
+
+        ``get_uavsar_coherence`` calls ``reproject_match`` once per
+        (flight_id, date_pair) combination and then uses ``xr.concat`` to
+        assemble the final 4-D ``(flight_id, pair, y, x)`` cube.  The mock
+        must therefore return only the single-slice result.
+        """
         return xr.Dataset(
             {
                 "coherence": xr.DataArray(
-                    np.full(
-                        (len(flight_ids), len(date_pairs), _NY, _NX),
-                        0.7,
-                        dtype=np.float32,
-                    ),
-                    dims=["flight_id", "pair", "y", "x"],
+                    np.full((_NY, _NX), 0.7, dtype=np.float32),
+                    dims=["y", "x"],
                     coords={
-                        "flight_id": flight_ids,
-                        "pair": pair_labels,
                         "y": tile_ref_grid.coords["y"].values,
                         "x": tile_ref_grid.coords["x"].values,
                     },
@@ -373,10 +373,10 @@ class TestPreClippingGetUavsarCoherence:
         """
         from rioxarray.raster_dataset import RasterDataset
 
-        tile_sized_coh = self._make_tile_sized_coh(date_pairs, flight_ids, tile_ref_grid)
+        single_pair_ds = self._make_single_pair_ds(tile_ref_grid)
 
         def _fake_reproject_match(self_rio, ref, *args, **kwargs):
-            return tile_sized_coh
+            return single_pair_ds
 
         with patch.object(RasterDataset, "reproject_match", _fake_reproject_match):
             result = get_uavsar_coherence(
@@ -404,12 +404,12 @@ class TestPreClippingGetUavsarCoherence:
         # Accumulate every Dataset that is passed to reproject_match.
         captured: list[xr.Dataset] = []
 
-        tile_sized_coh = self._make_tile_sized_coh(date_pairs, flight_ids, tile_ref_grid)
+        single_pair_ds = self._make_single_pair_ds(tile_ref_grid)
 
         def _capturing_reproject_match(self_rio, ref, *args, **kwargs):
             # self_rio._obj is the underlying xr.Dataset
             captured.append(self_rio._obj)
-            return tile_sized_coh
+            return single_pair_ds
 
         with patch.object(
             RasterDataset, "reproject_match", _capturing_reproject_match
@@ -883,9 +883,12 @@ class TestAssembleDataLargeAOI:
             return ds
 
         fp_dest = str(tmp_path / "multi_tile.zarr")
-        # tile_size_deg ≈ 0.1° for EPSG:4326 at ~45° lat.
-        # tile_size_m = 0.1° × 78660 m/° ≈ 7866 m
-        tile_size_m = 7_866.0
+        # _TILE_OVERLAP_FACTOR slightly exceeds 0.1 so that _frange produces
+        # exactly 2 x-starts and 2 y-starts for the 0.2° × 0.2° master AOI,
+        # giving 2 × 2 = 4 tiles.  A value of exactly 0.1 is unsafe because
+        # floating-point accumulation in _frange can yield a spurious third start.
+        _TILE_OVERLAP_FACTOR = 0.101
+        tile_size_m = METRES_PER_DEGREE_AT_45_LAT * _TILE_OVERLAP_FACTOR
 
         monkeypatch.setattr(_layers, "validate_aoi", lambda x: x)
         monkeypatch.setattr(_layers, "validate_date_pairs", lambda x: x)
