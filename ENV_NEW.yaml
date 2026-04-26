@@ -1,0 +1,46 @@
+name: coherence_v2
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  # Core Python & Jupyter
+  - python=3.11  # 3.11 is the current sweet spot for geospatial stability
+  - jupyterlab
+  
+  # Geospatial & Data Science Core
+  - xarray
+  - rioxarray
+  - rasterio
+  - geopandas
+  - pandas
+  - numpy
+  - scipy
+  - shapely
+  - pyproj
+  - zarr
+  - numcodecs
+  
+  # Visualization
+  - matplotlib
+  - seaborn
+  - cartopy
+  
+  # Data Access & Cloud
+  - earthaccess
+  - fsspec
+  - s3fs
+  
+  # Specialized Analysis
+  - py3dep
+  - pygeohydro
+  - pyinterpolate
+  - scikit-learn
+  - tifffile
+  - xarray-spatial
+  
+  # Testing
+  - pytest
+  
+  # Pip-only packages (Tools not available on Conda-Forge)
+  - pip:
+    - uavsar-pytools
