@@ -173,20 +173,26 @@ class TestGetUavsarCoherence:
                 fp=str(tmp_path),  # no sub-directories created
             )
 
-    def test_missing_coherence_file_raises(self, tmp_path, date_pairs, flight_ids, ref_grid):
-        """A flight directory that exists but has no matching files raises ``FileNotFoundError``."""
+    def test_missing_coherence_file_pads_nans(self, tmp_path, date_pairs, flight_ids, ref_grid):
+        """
+        When a coherence file is absent, the function must pad the missing
+        pair with NaN values (using a dummy array shaped like ``tile_ref_grid``)
+        rather than raising ``FileNotFoundError``.
+        """
         for fid in flight_ids:
             (tmp_path / str(fid)).mkdir(parents=True)
 
-        with pytest.raises(FileNotFoundError, match="Could not find coherence file"):
-            get_uavsar_coherence(
-                tile_aoi=None,
-                date_pairs=date_pairs,
-                flight_ids=flight_ids,
-                crs="EPSG:4326",
-                tile_ref_grid=ref_grid,
-                fp=str(tmp_path),
-            )
+        result = get_uavsar_coherence(
+            tile_aoi=None,
+            date_pairs=date_pairs,
+            flight_ids=flight_ids,
+            crs="EPSG:4326",
+            tile_ref_grid=ref_grid,
+            fp=str(tmp_path),
+        )
+        # The dataset must still contain the 'coherence' variable, filled with NaN.
+        assert "coherence" in result
+        assert result["coherence"].isnull().all().item()
 
     # def test_delta_t_coordinate_values(self, tmp_path, date_pairs, flight_ids, ref_grid):
     #     """``delta_t`` coordinate must equal ``(end_date - start_date).days``."""
@@ -227,24 +233,22 @@ class TestGetUavsarCoherence:
 
 
 class TestGetUavsarIncidence:
-    """Tests for ``get_uavsar_incidence`` with rioxarray file I/O mocked."""
+    """Tests for ``get_uavsar_incidence`` with I/O mocked via ``read_and_reproject_rasterio``."""
 
     _NY, _NX = 5, 5
     _Y_COORDS = np.linspace(38.1, 38.0, _NY)
     _X_COORDS = np.linspace(-120.0, -119.9, _NX)
 
-    def _make_inc_da(self) -> xr.DataArray:
-        """Minimal incidence-angle DataArray returned by ``rxa.open_rasterio``."""
-        data = np.full((1, self._NY, self._NX), 45.0, dtype=np.float32)
-        return xr.DataArray(
+    def _make_inc_ds(self) -> xr.Dataset:
+        """Minimal incidence-angle Dataset as returned by ``read_and_reproject_rasterio``."""
+        data = np.full((self._NY, self._NX), 45.0, dtype=np.float32)
+        da = xr.DataArray(
             data,
-            dims=["band", "y", "x"],
-            coords={
-                "band": [1],
-                "y": self._Y_COORDS,
-                "x": self._X_COORDS,
-            },
+            dims=["y", "x"],
+            coords={"y": self._Y_COORDS, "x": self._X_COORDS},
+            name="incidence_angle",
         )
+        return da.to_dataset(name="incidence_angle")
 
     def _make_inc_file(self, tmp_path, flight_id):
         fname = f"uavsar_{flight_id}_s2.inc.tif"
@@ -255,22 +259,16 @@ class TestGetUavsarIncidence:
         for fid in flight_ids:
             self._make_inc_file(tmp_path, fid)
 
-        inc_da = self._make_inc_da()
+        inc_ds = self._make_inc_ds()
 
-        with patch("layers.rxa.open_rasterio", return_value=inc_da):
-            with patch("xarray.DataArray.rio", create=True) as da_rio:
-                squeezed = inc_da.squeeze()
-                squeezed.name = "incidence_angle"
-                da_rio.write_crs = MagicMock(return_value=None)
-                da_rio.reproject_match = MagicMock(return_value=squeezed)
-
-                result = get_uavsar_incidence(
-                    tile_aoi=aoi,
-                    flight_ids=flight_ids,
-                    fp_inc=str(tmp_path),
-                    tile_ref_grid=ref_grid,
-                    crs="EPSG:4326",
-                )
+        with patch("layers.read_and_reproject_rasterio", return_value=inc_ds):
+            result = get_uavsar_incidence(
+                tile_aoi=aoi,
+                flight_ids=flight_ids,
+                fp_inc=str(tmp_path),
+                tile_ref_grid=ref_grid,
+                crs="EPSG:4326",
+            )
 
         assert result.name == "incidence_angle"
 
@@ -325,27 +323,27 @@ class TestAssembleDataSanitization:
 
 class TestPreClippingGetUavsarCoherence:
     """
-    Verify the native-CRS pre-clip logic in ``get_uavsar_coherence``.
+    Verify that ``get_uavsar_coherence`` aligns output to the tile reference
+    grid using the rasterio WarpedVRT path (``read_and_reproject_rasterio``).
 
     Real ``.tif`` files (30 × 30 pixels, extent ``(-120.1, 37.9, -119.8, 38.2)``)
     are written to disk by the ``larger_tif_dir`` fixture.  The tile_aoi covers
     only ``(-120.0, 38.0, -119.9, 38.1)`` — roughly the inner third of the
     raster extent.
 
-    The test intercepts ``RasterDataset.reproject_match`` at the class level so
-    that:
+    The WarpedVRT approach replaces the former explicit ``.sel()`` pre-clip;
+    rasterio handles windowed reading internally.  Tests in this class verify:
 
-    * the **pre-clip** ``.sel()`` call runs for real and reduces the 30 × 30
-      array to the tile extent before ``reproject_match`` is invoked;
-    * the final **output** spatial dimensions equal those of ``tile_ref_grid``.
+    * the final output spatial dimensions equal those of ``tile_ref_grid``;
+    * ``read_and_reproject_rasterio`` is invoked once per (flight_id, pair).
     """
 
     def _make_single_pair_ds(self, tile_ref_grid):
         """
         Return a single 2-D (y × x) coherence Dataset that mirrors what
-        ``reproject_match`` produces for **one (flight, pair)** call.
+        ``read_and_reproject_rasterio`` produces for **one (flight, pair)** call.
 
-        ``get_uavsar_coherence`` calls ``reproject_match`` once per
+        ``get_uavsar_coherence`` calls ``read_and_reproject_rasterio`` once per
         (flight_id, date_pair) combination and then uses ``xr.concat`` to
         assemble the final 4-D ``(flight_id, pair, y, x)`` cube.  The mock
         must therefore return only the single-slice result.
@@ -368,17 +366,14 @@ class TestPreClippingGetUavsarCoherence:
     ):
         """
         The output ``coherence`` variable must have the same spatial dimensions
-        (y × x) as ``tile_ref_grid``, proving that pre-clip + reproject_match
+        (y × x) as ``tile_ref_grid``, proving that ``read_and_reproject_rasterio``
         aligned the oversized raster to the tile reference grid.
         """
-        from rioxarray.raster_dataset import RasterDataset
+        import layers as _layers
 
         single_pair_ds = self._make_single_pair_ds(tile_ref_grid)
 
-        def _fake_reproject_match(self_rio, ref, *args, **kwargs):
-            return single_pair_ds
-
-        with patch.object(RasterDataset, "reproject_match", _fake_reproject_match):
+        with patch.object(_layers, "read_and_reproject_rasterio", return_value=single_pair_ds):
             result = get_uavsar_coherence(
                 tile_aoi=aoi,
                 date_pairs=date_pairs,
@@ -391,29 +386,26 @@ class TestPreClippingGetUavsarCoherence:
         assert result["coherence"].sizes["x"] == tile_ref_grid.sizes["x"]
         assert result["coherence"].sizes["y"] == tile_ref_grid.sizes["y"]
 
-    def test_preclip_reduces_pixels_before_reproject(
+    def test_vrt_called_per_flight_and_pair(
         self, larger_tif_dir, date_pairs, flight_ids, aoi, tile_ref_grid
     ):
         """
-        The DataArray passed to ``reproject_match`` must have fewer x and y
-        pixels than the original 30 × 30 raster, confirming the native-CRS
-        ``.sel()`` pre-clip ran before reprojection.
-        """
-        from rioxarray.raster_dataset import RasterDataset
+        ``read_and_reproject_rasterio`` must be called exactly once per
+        (flight_id, date_pair) combination, with ``tile_ref_grid`` as the
+        ``ref_da`` argument.
 
-        # Accumulate every Dataset that is passed to reproject_match.
-        captured: list[xr.Dataset] = []
+        This replaces the old pre-clip test: with the rasterio WarpedVRT
+        approach, windowed reading is handled internally by rasterio, so
+        there is no explicit ``.sel()`` pre-clip to inspect.  Instead we
+        verify that the fast VRT path is invoked the correct number of times.
+        """
+        import layers as _layers
 
         single_pair_ds = self._make_single_pair_ds(tile_ref_grid)
 
-        def _capturing_reproject_match(self_rio, ref, *args, **kwargs):
-            # self_rio._obj is the underlying xr.Dataset
-            captured.append(self_rio._obj)
-            return single_pair_ds
-
         with patch.object(
-            RasterDataset, "reproject_match", _capturing_reproject_match
-        ):
+            _layers, "read_and_reproject_rasterio", return_value=single_pair_ds
+        ) as mock_vrt:
             get_uavsar_coherence(
                 tile_aoi=aoi,
                 date_pairs=date_pairs,
@@ -423,14 +415,16 @@ class TestPreClippingGetUavsarCoherence:
                 fp=str(larger_tif_dir),
             )
 
-        assert len(captured) > 0, "reproject_match was never called"
-        for da in captured:
-            # Each pre-clipped Dataset must be smaller than the 30 × 30 original.
-            assert da.sizes["x"] < 30, (
-                f"Pre-clip did not reduce x dimension: got {da.sizes['x']}"
-            )
-            assert da.sizes["y"] < 30, (
-                f"Pre-clip did not reduce y dimension: got {da.sizes['y']}"
+        expected_calls = len(flight_ids) * len(date_pairs)
+        assert mock_vrt.call_count == expected_calls, (
+            f"Expected {expected_calls} VRT calls "
+            f"({len(flight_ids)} flights × {len(date_pairs)} pairs), "
+            f"got {mock_vrt.call_count}"
+        )
+        # Every call must use the tile_ref_grid as the reprojection target.
+        for call_args in mock_vrt.call_args_list:
+            assert call_args.kwargs.get("ref_da") is tile_ref_grid, (
+                "read_and_reproject_rasterio was not called with tile_ref_grid as ref_da"
             )
 
 
@@ -668,6 +662,29 @@ class TestAssembleDataLargeAOI:
             }
         )
 
+    @staticmethod
+    def _build_mock_aorc_ds(date_pairs) -> xr.Dataset:
+        """
+        Minimal AORC metrics dataset returned by the mocked ``get_aorc_layers``.
+
+        ``assemble_data_largeaoi`` calls ``.compute()`` on the result before
+        passing it to per-tile ``assemble_data`` calls.  Since this is a plain
+        (non-Dask) xr.Dataset, ``.compute()`` is a no-op that returns itself.
+        """
+        pair_labels = [
+            f"{s.strftime('%y%m%d')}_{e.strftime('%y%m%d')}"
+            for s, e in date_pairs
+        ]
+        return xr.Dataset(
+            {
+                "mean_temp": xr.DataArray(
+                    np.full((len(date_pairs), _NY, _NX), -5.0, dtype="float32"),
+                    dims=["pair", "y", "x"],
+                    coords={"pair": pair_labels, "y": _Y_COORDS, "x": _X_COORDS},
+                ),
+            }
+        )
+
     @pytest.fixture()
     def global_ref(self) -> xr.DataArray:
         """5 × 5 global reference DataArray matching the tile dataset's coordinates."""
@@ -687,11 +704,13 @@ class TestAssembleDataLargeAOI:
         import layers as _layers
 
         tile_ds = self._build_tile_ds(date_pairs, flight_ids)
+        mock_aorc_ds = self._build_mock_aorc_ds(date_pairs)
         fp_dest = str(tmp_path / "output.zarr")
 
         monkeypatch.setattr(_layers, "validate_aoi", lambda x: x)
         monkeypatch.setattr(_layers, "validate_date_pairs", lambda x: x)
         monkeypatch.setattr(_layers, "make_reference_grid", lambda **kw: global_ref)
+        monkeypatch.setattr(_layers, "get_aorc_layers", lambda **kw: mock_aorc_ds)
         monkeypatch.setattr(_layers, "assemble_data", lambda **kw: tile_ds)
 
         assemble_data_largeaoi(
@@ -716,6 +735,7 @@ class TestAssembleDataLargeAOI:
         import layers as _layers
 
         tile_ds = self._build_tile_ds(date_pairs, flight_ids)
+        mock_aorc_ds = self._build_mock_aorc_ds(date_pairs)
         fp_dest = str(tmp_path / "output.zarr")
 
         call_log: list = []
@@ -727,6 +747,7 @@ class TestAssembleDataLargeAOI:
         monkeypatch.setattr(_layers, "validate_aoi", lambda x: x)
         monkeypatch.setattr(_layers, "validate_date_pairs", lambda x: x)
         monkeypatch.setattr(_layers, "make_reference_grid", lambda **kw: global_ref)
+        monkeypatch.setattr(_layers, "get_aorc_layers", lambda **kw: mock_aorc_ds)
         monkeypatch.setattr(_layers, "assemble_data", _counting_assemble_data)
 
         assemble_data_largeaoi(
@@ -753,11 +774,13 @@ class TestAssembleDataLargeAOI:
         import layers as _layers
 
         tile_ds = self._build_tile_ds(date_pairs, flight_ids)
+        mock_aorc_ds = self._build_mock_aorc_ds(date_pairs)
         fp_dest = str(tmp_path / "output.zarr")
 
         monkeypatch.setattr(_layers, "validate_aoi", lambda x: x)
         monkeypatch.setattr(_layers, "validate_date_pairs", lambda x: x)
         monkeypatch.setattr(_layers, "make_reference_grid", lambda **kw: global_ref)
+        monkeypatch.setattr(_layers, "get_aorc_layers", lambda **kw: mock_aorc_ds)
         monkeypatch.setattr(_layers, "assemble_data", lambda **kw: tile_ds)
 
         assemble_data_largeaoi(
@@ -786,11 +809,13 @@ class TestAssembleDataLargeAOI:
         import layers as _layers
 
         tile_ds = self._build_tile_ds(date_pairs, flight_ids)
+        mock_aorc_ds = self._build_mock_aorc_ds(date_pairs)
         fp_dest = str(tmp_path / "output.zarr")
 
         monkeypatch.setattr(_layers, "validate_aoi", lambda x: x)
         monkeypatch.setattr(_layers, "validate_date_pairs", lambda x: x)
         monkeypatch.setattr(_layers, "make_reference_grid", lambda **kw: global_ref)
+        monkeypatch.setattr(_layers, "get_aorc_layers", lambda **kw: mock_aorc_ds)
         monkeypatch.setattr(_layers, "assemble_data", lambda **kw: tile_ds)
 
         assemble_data_largeaoi(
@@ -890,9 +915,12 @@ class TestAssembleDataLargeAOI:
         _TILE_OVERLAP_FACTOR = 0.101
         tile_size_m = METRES_PER_DEGREE_AT_45_LAT * _TILE_OVERLAP_FACTOR
 
+        mock_aorc_ds = self._build_mock_aorc_ds(date_pairs)
+
         monkeypatch.setattr(_layers, "validate_aoi", lambda x: x)
         monkeypatch.setattr(_layers, "validate_date_pairs", lambda x: x)
         monkeypatch.setattr(_layers, "make_reference_grid", lambda **kw: big_global_ref)
+        monkeypatch.setattr(_layers, "get_aorc_layers", lambda **kw: mock_aorc_ds)
         monkeypatch.setattr(_layers, "assemble_data", _tile_assemble_data)
 
         assemble_data_largeaoi(
@@ -906,6 +934,57 @@ class TestAssembleDataLargeAOI:
 
         assert len(call_log) == 4, (
             f"Expected 4 assemble_data calls for 4-tile AOI, got {len(call_log)}"
+        )
+
+    def test_aorc_prefetched_once_and_passed_to_tiles(
+        self, aoi, date_pairs, flight_ids, global_ref, tmp_path, monkeypatch
+    ):
+        """
+        ``get_aorc_layers`` must be called exactly **once** (for the full
+        master AOI) regardless of the number of tiles.  Each ``assemble_data``
+        call must receive the pre-fetched AORC dataset via the ``aorc_ds``
+        keyword argument.
+        """
+        import layers as _layers
+
+        tile_ds = self._build_tile_ds(date_pairs, flight_ids)
+        mock_aorc_ds = self._build_mock_aorc_ds(date_pairs)
+        fp_dest = str(tmp_path / "output.zarr")
+
+        aorc_call_log: list = []
+        aorc_ds_received: list = []
+
+        def _mock_get_aorc_layers(**kw):
+            aorc_call_log.append(kw)
+            return mock_aorc_ds
+
+        def _mock_assemble_data(**kw):
+            aorc_ds_received.append(kw.get("aorc_ds"))
+            return tile_ds
+
+        monkeypatch.setattr(_layers, "validate_aoi", lambda x: x)
+        monkeypatch.setattr(_layers, "validate_date_pairs", lambda x: x)
+        monkeypatch.setattr(_layers, "make_reference_grid", lambda **kw: global_ref)
+        monkeypatch.setattr(_layers, "get_aorc_layers", _mock_get_aorc_layers)
+        monkeypatch.setattr(_layers, "assemble_data", _mock_assemble_data)
+
+        assemble_data_largeaoi(
+            master_aoi=aoi,
+            date_pairs=date_pairs,
+            flight_ids=flight_ids,
+            fp_dest=fp_dest,
+            tile_size_m=100_000,
+            overwrite=True,
+        )
+
+        assert len(aorc_call_log) == 1, (
+            f"get_aorc_layers must be called once (for master AOI), "
+            f"got {len(aorc_call_log)} calls"
+        )
+        # Each tile's assemble_data call must receive the pre-fetched AORC dataset.
+        assert len(aorc_ds_received) == 1
+        assert aorc_ds_received[0] is not None, (
+            "assemble_data did not receive the pre-fetched aorc_ds"
         )
 
     

@@ -96,6 +96,7 @@ def assemble_data(
     fp_snowclimate: str = '../data/NSIDC-0768/',
     crs: str = 'EPSG:4326',
     res: int = 30,
+    aorc_ds: Optional[xr.Dataset] = None,
 ) -> xr.Dataset:
     """
     Fetch, align, and return all data layers for a single spatial tile.
@@ -130,6 +131,13 @@ def assemble_data(
         Coordinate reference system string (default ``'EPSG:4326'``).
     res:
         Target spatial resolution in metres (default ``30``).
+    aorc_ds:
+        Optional pre-fetched AORC metrics dataset covering the full master
+        AOI (computed once by :func:`assemble_data_largeaoi` before the tile
+        loop).  When provided, the S3 fetch is skipped and ``aorc_ds`` is
+        clipped to ``tile_aoi`` and reprojected to the tile reference grid
+        instead.  When ``None`` (default), :func:`get_aorc_layers` is called
+        as usual to fetch AORC data from S3 for this tile.
 
     Returns
     -------
@@ -220,7 +228,15 @@ def assemble_data(
 
     # 7. Get AORC meteorological layers
     s = time.time()
-    aorc = get_aorc_layers(tile_aoi=tile_aoi, date_pairs=date_pairs, crs=crs, tile_ref_grid=tile_ref)
+    if aorc_ds is not None:
+        # Fast path: clip the pre-fetched master AORC metrics to this tile's
+        # extent and reproject to the tile reference grid.  Avoids repeated
+        # S3 fetches and Dask graph rebuilds inside the tile loop.
+        g = gpd.GeoSeries([tile_aoi], crs=crs)
+        aorc = aorc_ds.rio.clip(g.geometry.values, crs=crs)
+        aorc = aorc.rio.reproject_match(tile_ref)
+    else:
+        aorc = get_aorc_layers(tile_aoi=tile_aoi, date_pairs=date_pairs, crs=crs, tile_ref_grid=tile_ref)
     e = time.time()
     logger.info("Tile: got AORC: %s in %.3f seconds.", list(aorc.keys()), e - s)
 
@@ -268,6 +284,13 @@ def assemble_data_largeaoi(
     (default 5 km × 5 km).  Each tile is processed independently by
     :func:`assemble_data`, and the resulting in-memory dataset is appended to
     a pre-initialised Zarr store via ``region``-based writes.
+
+    To reduce S3 metadata overhead and Dask graph complexity, AORC data is
+    fetched **once** for the full ``master_aoi`` before the tile loop begins
+    (via :func:`get_aorc_layers` with ``tile_ref_grid=None``) and then passed
+    into each :func:`assemble_data` call as the ``aorc_ds`` argument.  Each
+    tile clips this in-memory dataset to its own extent rather than issuing a
+    separate S3 request.
 
     Parameters
     ----------
@@ -335,6 +358,31 @@ def assemble_data_largeaoi(
         total_tiles, len(x_starts), len(y_starts),
     )
 
+    # ── Pre-fetch AORC for the full master AOI ────────────────────────────────
+    # Fetching AORC once for the master AOI avoids opening the S3 zarr store
+    # and rebuilding Dask graphs for every tile.  The metrics dataset is
+    # computed into memory here; each tile then clips from this in-memory copy.
+    logger.info("Pre-fetching AORC data for the full master AOI (all date pairs).")
+    s = time.time()
+    # If the input CRS is projected, convert master_aoi to WGS84 for the AORC
+    # fetch (AORC data is stored in geographic coordinates).
+    aorc_crs = crs
+    aorc_aoi = master_aoi
+    if not crs_obj.is_geographic:
+        wgs84 = ProjCRS('EPSG:4326')
+        project = Transformer.from_crs(crs_obj, wgs84, always_xy=True).transform
+        aorc_aoi = transform(project, master_aoi)
+        aorc_crs = 'EPSG:4326'
+    master_aorc_ds = get_aorc_layers(
+        tile_aoi=aorc_aoi,
+        date_pairs=date_pairs,
+        crs=aorc_crs,
+        tile_ref_grid=None,
+    ).compute()
+    e = time.time()
+    logger.info("AORC master dataset loaded in %.3f seconds.", e - s)
+    # ─────────────────────────────────────────────────────────────────────────
+
     # Initialise an empty Zarr store sized to the global grid (no compute).
     # We create a zero-filled template dataset with the correct structure by
     # processing the first tile, then write an empty shell for the full extent.
@@ -371,6 +419,7 @@ def assemble_data_largeaoi(
                     fp_snowclimate=fp_snowclimate,
                     crs=crs,
                     res=res,
+                    aorc_ds=master_aorc_ds,
                 )
             except Exception as exc:
                 logger.error(
@@ -615,46 +664,19 @@ def get_uavsar_coherence(
             # without a spatial filter) or when the native CRS cannot be
             # resolved (e.g. mocked in tests).
             if tile_aoi is not None:
-                # try:
-                #     native_crs = ProjCRS.from_user_input(da.rio.crs)
-                #     tile_aoi_native = gpd.GeoSeries([tile_aoi], crs=crs).to_crs(
-                #         native_crs.to_epsg() or native_crs.to_wkt()
-                #     )
-                #     minx, miny, maxx, maxy = tile_aoi_native.total_bounds
-
-                #     # Handle both ascending and descending y-axes.
-                #     y_vals = da.coords['y'].values
-                #     if len(y_vals) >= 2 and y_vals[0] > y_vals[-1]:
-                #         # Descending y (north→south): slice maxy first, miny last.
-                #         da = da.sel(x=slice(minx, maxx), y=slice(maxy, miny))
-                #     else:
-                #         # Ascending y (south→north).
-                #         da = da.sel(x=slice(minx, maxx), y=slice(miny, maxy))
-                # except Exception as exc:
-                #     logger.debug(
-                #         "Native-CRS pre-clip skipped for coherence file %s: %s",
-                #         file_path, exc,
-                #     )
                 try:
-                    # Use our new fast function!
-                    print(f"Using VRT to read and reproject {file_path}")
+                    # Use the fast rasterio/VRT path for read + reproject.
                     ds_matched = read_and_reproject_rasterio(
-                        filepath=str(file_path), 
-                        ref_da=tile_ref_grid, 
+                        filepath=str(file_path),
+                        ref_da=tile_ref_grid,
                         var_name='coherence',
-                        resampling=Resampling.bilinear
+                        resampling=Resampling.bilinear,
                     )
                     pair_arrays.append(ds_matched)
-                    
-                except Exception as e:
-                    logger.warning(f"Failed to process {file_path}: {e}")
+                except Exception as exc:
+                    logger.warning("Failed to process %s: %s", file_path, exc)
                     dummy_da = xr.full_like(tile_ref_grid, fill_value=np.nan)
                     pair_arrays.append(dummy_da.to_dataset(name='coherence'))
-
-            # Align to the tile reference grid.
-            # da_matched = da.rio.reproject_match(tile_ref_grid)
-
-            # pair_arrays.append(da_matched)
 
         # Concatenate all date pairs for this flight.
         pair_coord = xr.DataArray(
@@ -662,7 +684,6 @@ def get_uavsar_coherence(
             dims=['pair'],
             name='pair',
         )
-        print(pair_arrays)
         flight_da = xr.concat(pair_arrays, dim=pair_coord, coords="minimal", compat="override")
         flight_arrays.append(flight_da)
 
@@ -687,9 +708,9 @@ def get_uavsar_incidence(
     Load pre-calculated UAVSAR incidence angle files and concatenate them along
     a ``flight_id`` dimension.
 
-    Before reprojection, each raster is sliced to the bounding box of
-    ``tile_aoi`` projected into the raster's native CRS.  This avoids reading
-    the entire raster into memory.
+    Files are read and reprojected directly to the tile reference grid using
+    :func:`read_and_reproject_rasterio`, which bypasses xarray overhead and
+    uses a rasterio ``WarpedVRT`` for efficient in-memory warping.
 
     Parameters
     ----------
@@ -703,8 +724,12 @@ def get_uavsar_incidence(
         Files are matched using the pattern ``*{flight_id}*s2.inc.tif``.
     tile_ref_grid:
         Reference grid for this tile used to spatially align all arrays.
+        A :class:`xarray.DataArray` is preferred; if a
+        :class:`xarray.Dataset` is provided its first data variable is used.
     crs:
         Coordinate reference system string of ``tile_aoi`` (default ``'EPSG:4326'``).
+        Not used directly for reprojection (which is driven by ``tile_ref_grid``'s
+        CRS), but retained for API consistency.
 
     Returns
     -------
@@ -720,10 +745,16 @@ def get_uavsar_incidence(
     fp_inc = Path(fp_inc)
     inc_arrays = []
 
+    # read_and_reproject_rasterio requires a DataArray with CRS metadata.
+    ref_da = (
+        tile_ref_grid
+        if isinstance(tile_ref_grid, xr.DataArray)
+        else next(iter(tile_ref_grid.data_vars.values()))
+    )
+
     for fid in flight_ids:
         search_pattern = f"*{fid}*s2.inc.tif"
         found_files = list(fp_inc.glob(search_pattern))
-
 
         if not found_files:
             raise FileNotFoundError(
@@ -734,40 +765,14 @@ def get_uavsar_incidence(
         file_path = found_files[0]
         logger.debug("Loading incidence angle file: %s", file_path)
 
-        # Load the file; masked=True converts nodata/fill values to np.nan.
-        da = rxa.open_rasterio(file_path, masked=True).squeeze()
-
-        # Pre-clip to the tile bounding box in the raster's native CRS to
-        # avoid reading the full file into memory before reprojection.
-        # Falls back gracefully if the native CRS cannot be resolved.
-        try:
-            native_crs = ProjCRS.from_user_input(da.rio.crs)
-            tile_aoi_native = gpd.GeoSeries([tile_aoi], crs=crs).to_crs(
-                native_crs.to_epsg() or native_crs.to_wkt()
-            )
-            minx, miny, maxx, maxy = tile_aoi_native.total_bounds
-
-            # Handle both ascending and descending y-axes.
-            y_vals = da.coords['y'].values
-            if len(y_vals) >= 2 and y_vals[0] > y_vals[-1]:
-                # Descending y (north→south): slice maxy first, miny last.
-                da = da.sel(x=slice(minx, maxx), y=slice(maxy, miny))
-            else:
-                # Ascending y (south→north).
-                da = da.sel(x=slice(minx, maxx), y=slice(miny, maxy))
-        except Exception as exc:
-            logger.debug(
-                "Native-CRS pre-clip skipped for incidence file %s: %s",
-                file_path, exc,
-            )
-
-        # Write CRS before reprojecting.
-        da.rio.write_crs(crs, inplace=True)
-
-        # Align to the tile reference grid.
-        da_matched = da.rio.reproject_match(tile_ref_grid)
-
-        da_matched.name = 'incidence_angle'
+        # Read and reproject in one step using the fast rasterio/VRT path.
+        ds_reprojected = read_and_reproject_rasterio(
+            filepath=str(file_path),
+            ref_da=ref_da,
+            var_name='incidence_angle',
+            resampling=Resampling.bilinear,
+        )
+        da_matched = ds_reprojected['incidence_angle']
 
         inc_arrays.append(da_matched)
 
@@ -1293,6 +1298,10 @@ def get_aorc_layers(
     per-date-pair metrics using :func:`get_aorc_metrics`.  Only the spatial
     extent of ``tile_aoi`` is clipped from the remote store.
 
+    The time dimension is subset **before** the spatial clip is applied so
+    that the Dask graph only materialises the relevant time steps, reducing
+    both S3 metadata overhead and in-memory Dask graph complexity.
+
     Parameters
     ----------
     tile_aoi:
@@ -1332,13 +1341,14 @@ def get_aorc_layers(
         )
         raise
 
-    # Clip to the tile AOI and rename spatial dimensions.
-    ds_clip = ds_full.rio.clip(g.geometry.values, crs=crs)
-    ds_clip = ds_clip.rename({'latitude': 'y', 'longitude': 'x'})
+    # Rename spatial dimensions once before the per-pair loop.
+    ds_full = ds_full.rename({'latitude': 'y', 'longitude': 'x'})
 
     ds_list = []
     for start_date, end_date in date_pairs:
-        ds_slice = ds_clip.sel(time=slice(start_date, end_date))
+        # Subset the time dimension first to reduce the Dask graph before the
+        # more expensive spatial clip operation.
+        ds_slice = ds_full.sel(time=slice(start_date, end_date))
 
         if len(ds_slice['time']) == 0:
             logger.warning(
@@ -1346,6 +1356,9 @@ def get_aorc_layers(
                 start_date, end_date,
             )
             continue
+
+        # Clip spatially on the smaller, already time-sliced dataset.
+        ds_slice = ds_slice.rio.clip(g.geometry.values, crs=crs)
 
         ds_metrics = get_aorc_metrics(ds_slice, metrics=metrics)
         pair_name = start_date.strftime('%y%m%d') + "_" + end_date.strftime('%y%m%d')
