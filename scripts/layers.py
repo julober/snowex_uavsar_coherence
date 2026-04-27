@@ -2,6 +2,7 @@ import logging
 import math
 import os
 import re
+import sys
 import time
 from datetime import date
 from pathlib import Path
@@ -21,7 +22,12 @@ from pyproj import CRS as ProjCRS
 from pyproj import Transformer
 from shapely.geometry import Polygon
 from shapely.ops import transform
+import rasterio
+from rasterio.vrt import WarpedVRT
+from rasterio.enums import Resampling
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+# from scripts.validation import validate_aoi, validate_date_pairs, make_reference_grid, validate_alignment
 from validation import validate_aoi, validate_date_pairs, make_reference_grid, validate_alignment
 
 logger = logging.getLogger(__name__)
@@ -233,7 +239,7 @@ def assemble_data(
 
     # Fix OOM masking: use lazy .isnull() instead of .values which forces eager
     # evaluation of the entire array into RAM.
-    nan_mask = ds['coherence'].isnull().any(dim=('flight_id', 'pair'))
+    nan_mask = ds['coherence'].isnull().all(dim=('flight_id', 'pair'))
     for var in ds.data_vars:
         if 'x' in ds[var].dims and 'y' in ds[var].dims:
             ds[var] = ds[var].where(~nan_mask, drop=False)
@@ -571,14 +577,22 @@ def get_uavsar_coherence(
             # Create a pair coordinate name (e.g. '210210_210224').
             pair_name = f"{date_str1}_{date_str2}"
 
-            search_pattern = f"*{fid}*{date_str1}*{date_str2}*coh*"
+            search_pattern = f"*{fid}*{date_str1}*{date_str2}*VV_s2*int_coh*" # TODO - pass in all other parameters needed to uniquely identify the coherence file.
             found_files = list(flight_dir.glob(search_pattern))
 
             if not found_files:
-                raise FileNotFoundError(
-                    f"Could not find coherence file for flight {fid} and "
-                    f"dates {pair_name} in {flight_dir}"
-                )
+                logger.warning(f"No coherence file found for {fid} on {date_str1}_{date_str2}. Padding with NaNs.")
+                dummy_da = xr.full_like(tile_ref_grid, fill_value=np.nan)
+                # Wrap it in a Dataset container with the correct variable name
+                dummy_ds = dummy_da.to_dataset(name='coherence')
+                pair_arrays.append(dummy_ds)
+                continue # Move on to the next date pair
+
+            # if not found_files:
+            #     raise FileNotFoundError(
+            #         f"Could not find coherence file for flight {fid} and "
+            #         f"dates {pair_name} in {flight_dir}"
+            #     )
 
             if len(found_files) > 1:
                 logger.warning(
@@ -601,31 +615,46 @@ def get_uavsar_coherence(
             # without a spatial filter) or when the native CRS cannot be
             # resolved (e.g. mocked in tests).
             if tile_aoi is not None:
-                try:
-                    native_crs = ProjCRS.from_user_input(da.rio.crs)
-                    tile_aoi_native = gpd.GeoSeries([tile_aoi], crs=crs).to_crs(
-                        native_crs.to_epsg() or native_crs.to_wkt()
-                    )
-                    minx, miny, maxx, maxy = tile_aoi_native.total_bounds
+                # try:
+                #     native_crs = ProjCRS.from_user_input(da.rio.crs)
+                #     tile_aoi_native = gpd.GeoSeries([tile_aoi], crs=crs).to_crs(
+                #         native_crs.to_epsg() or native_crs.to_wkt()
+                #     )
+                #     minx, miny, maxx, maxy = tile_aoi_native.total_bounds
 
-                    # Handle both ascending and descending y-axes.
-                    y_vals = da.coords['y'].values
-                    if len(y_vals) >= 2 and y_vals[0] > y_vals[-1]:
-                        # Descending y (north→south): slice maxy first, miny last.
-                        da = da.sel(x=slice(minx, maxx), y=slice(maxy, miny))
-                    else:
-                        # Ascending y (south→north).
-                        da = da.sel(x=slice(minx, maxx), y=slice(miny, maxy))
-                except Exception as exc:
-                    logger.debug(
-                        "Native-CRS pre-clip skipped for coherence file %s: %s",
-                        file_path, exc,
+                #     # Handle both ascending and descending y-axes.
+                #     y_vals = da.coords['y'].values
+                #     if len(y_vals) >= 2 and y_vals[0] > y_vals[-1]:
+                #         # Descending y (north→south): slice maxy first, miny last.
+                #         da = da.sel(x=slice(minx, maxx), y=slice(maxy, miny))
+                #     else:
+                #         # Ascending y (south→north).
+                #         da = da.sel(x=slice(minx, maxx), y=slice(miny, maxy))
+                # except Exception as exc:
+                #     logger.debug(
+                #         "Native-CRS pre-clip skipped for coherence file %s: %s",
+                #         file_path, exc,
+                #     )
+                try:
+                    # Use our new fast function!
+                    print(f"Using VRT to read and reproject {file_path}")
+                    ds_matched = read_and_reproject_rasterio(
+                        filepath=str(file_path), 
+                        ref_da=tile_ref_grid, 
+                        var_name='coherence',
+                        resampling=Resampling.bilinear
                     )
+                    pair_arrays.append(ds_matched)
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to process {file_path}: {e}")
+                    dummy_da = xr.full_like(tile_ref_grid, fill_value=np.nan)
+                    pair_arrays.append(dummy_da.to_dataset(name='coherence'))
 
             # Align to the tile reference grid.
-            da_matched = da.rio.reproject_match(tile_ref_grid)
+            # da_matched = da.rio.reproject_match(tile_ref_grid)
 
-            pair_arrays.append(da_matched)
+            # pair_arrays.append(da_matched)
 
         # Concatenate all date pairs for this flight.
         pair_coord = xr.DataArray(
@@ -633,7 +662,8 @@ def get_uavsar_coherence(
             dims=['pair'],
             name='pair',
         )
-        flight_da = xr.concat(pair_arrays, dim=pair_coord)
+        print(pair_arrays)
+        flight_da = xr.concat(pair_arrays, dim=pair_coord, coords="minimal", compat="override")
         flight_arrays.append(flight_da)
 
     # Concatenate all flights into the final 4-D array.
@@ -693,6 +723,7 @@ def get_uavsar_incidence(
     for fid in flight_ids:
         search_pattern = f"*{fid}*s2.inc.tif"
         found_files = list(fp_inc.glob(search_pattern))
+
 
         if not found_files:
             raise FileNotFoundError(
@@ -1550,3 +1581,50 @@ def get_years(
     for start_date, end_date in date_pairs:
         years.update([start_date.year, end_date.year])
     return years
+
+import rasterio
+from rasterio.vrt import WarpedVRT
+from rasterio.enums import Resampling
+
+def read_and_reproject_rasterio(
+    filepath: str, 
+    ref_da: xr.DataArray, 
+    var_name: str, 
+    resampling=Resampling.bilinear
+    ) -> xr.Dataset:
+    """
+    High-performance read and reproject using raw rasterio and WarpedVRT.
+    Bypasses Xarray overhead.
+    """
+    # Extract target grid properties from our reference DataArray
+    dst_crs = ref_da.rio.crs
+    dst_transform = ref_da.rio.transform()
+    dst_width = ref_da.rio.width
+    dst_height = ref_da.rio.height
+    
+    with rasterio.open(filepath) as src:
+        # Create a virtual warped dataset in memory
+        with WarpedVRT(
+            src,
+            crs=dst_crs,
+            transform=dst_transform,
+            width=dst_width,
+            height=dst_height,
+            resampling=resampling
+        ) as vrt:
+            # Read the data into a numpy array (band 1)
+            data = vrt.read(1)
+            
+            # Mask out nodata values (UAVSAR usually uses 0.0 for NoData)
+            nodata = src.nodata or 0.0
+            data = np.where(data == nodata, np.nan, data)
+            
+    # Wrap the fast numpy array back into an Xarray Dataset so it plays nice with the rest of your code
+    da = xr.DataArray(
+        data,
+        coords=ref_da.coords,
+        dims=ref_da.dims,
+        name=var_name
+    )
+    
+    return da.to_dataset()
