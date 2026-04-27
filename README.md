@@ -24,3 +24,11 @@ I plan to have clones of this package on CURC and maybe the BSU supercomputer, b
 build and environment in each of those spaces. On the supercomputers, I probably want to use the 
 `-p ./env` flag to install the environment into the local directory, where there is probably more
 space than on my home directory. [Reddit thread](https://www.reddit.com/r/Python/comments/wpcfad/best_practices_for_conda_virtual_environments/)
+
+To dynamically generate a list of requirements from pipreqs: 
+`pipreqsnb .`
+
+To remove version numbers from that list: 
+`sed 's/==.*$//' requirements.txt`
+
+To import to  
