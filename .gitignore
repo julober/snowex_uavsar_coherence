@@ -13,3 +13,4 @@ data/test_data_zach/
 
 # ignore QGIS stuff 
 qgis_files/
+notebooks/cache/aiohttp_cache.sqlite
