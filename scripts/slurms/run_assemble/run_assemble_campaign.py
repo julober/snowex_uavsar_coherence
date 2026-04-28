@@ -4,6 +4,7 @@ import logging
 import pandas as pd
 from pathlib import Path
 from shapely.wkt import loads
+from shapely.ops import unary_union  # <-- Added for geometry merging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ from scripts.layers import assemble_data_largeaoi
 def parse_args():
     parser = argparse.ArgumentParser(description="Run data assembly for a campaign.")
     
-    # Required Arguments (Provided by Slurm)
+    # Required Arguments
     parser.add_argument("--campaign", required=True, help="Campaign/Flight path name")
     parser.add_argument("--out-dir", required=True, help="Base output directory")
     parser.add_argument("--coh-dir", required=True, help="Coherence directory path")
@@ -22,7 +23,7 @@ def parse_args():
     parser.add_argument("--sc-dir", required=True, help="Snowclimate directory path")
     parser.add_argument("--parquet-index", required=True, help="Path to your metadata parquet file")
     
-    # Optional Arguments (If not provided, Python will figure them out)
+    # Optional Arguments
     parser.add_argument("--aoi-wkt", default=None, help="WKT string of bounding box")
     parser.add_argument("--flight-ids", nargs='*', default=None, help="List of flight IDs")
     parser.add_argument("--date-pairs", default=None, help="Optional specific date pairs")
@@ -34,9 +35,8 @@ if __name__ == "__main__":
     logger.info(f"Starting assembly for campaign: {args.campaign}")
 
     # 1. Deduce missing info from Parquet if needed
-    if not args.aoi_wkt or not args.flight_ids:
-        logger.info("AOI or Flight IDs not provided. Looking up in Parquet index...")
-        # Assuming you made the summary table mentioned above
+    if not args.aoi_wkt or not args.flight_ids or not args.date_pairs:
+        logger.info("Missing arguments. Looking up in Parquet index...")
         df_index = pd.read_parquet(args.parquet_index)
         
         # Filter to just this campaign
@@ -46,27 +46,52 @@ if __name__ == "__main__":
             logger.error(f"Campaign {args.campaign} not found in {args.parquet_index}")
             sys.exit(1)
             
-        # Extract flight IDs and AOI
+        # --- FLIGHT IDS ---
         flight_ids = args.flight_ids if args.flight_ids else campaign_df['flight_num'].unique().tolist()
         
-        # Grab the bounding box for this campaign (assuming it's stored as WKT)
-        aoi_wkt = args.aoi_wkt if args.aoi_wkt else campaign_df['aoi_geometry'].iloc[0]
-        master_aoi = loads(aoi_wkt)
+        # --- AOI UNION ---
+        if args.aoi_wkt:
+            master_aoi = loads(args.aoi_wkt)
+        else:
+            # Load all WKT geometries for this campaign into Shapely Polygons
+            geometries = [loads(wkt) for wkt in campaign_df['aoi_geometry']]
+            # Merge them into a single shape, then get the rectangular bounding envelope
+            merged_aoi = unary_union(geometries).envelope
+            master_aoi = merged_aoi
+            logger.info(f"Unioned AOI created for flight(s): {flight_ids}")
+
+        # --- DATE PAIRS UNION ---
+        if args.date_pairs:
+            # If passed explicitly, you'd likely want to evaluate/parse it here
+            date_pairs = args.date_pairs
+        else:
+            # Assume Parquet has a 'date_pairs' column (containing lists of date tuples/strings)
+            if 'date_pairs' in campaign_df.columns:
+                all_pairs = set()
+                for pairs_list in campaign_df['date_pairs']:
+                    # Add to set to automatically drop duplicates across flight nums
+                    all_pairs.update(tuple(p) for p in pairs_list)
+                
+                # Convert back to list of pandas Timestamps
+                date_pairs = [(pd.Timestamp(start), pd.Timestamp(end)) for start, end in all_pairs]
+                # Sort chronologically by start date, then end date
+                date_pairs = sorted(date_pairs, key=lambda x: (x[0], x[1]))
+                logger.info(f"Unioned {len(date_pairs)} unique date pairs from parquet.")
+            else:
+                logger.info("No 'date_pairs' column found in parquet. Leaving as None for auto-discovery.")
+                date_pairs = None
     else:
         flight_ids = args.flight_ids
         master_aoi = loads(args.aoi_wkt)
-
-    # Note: If date_pairs is None, we let assemble_data_largeaoi figure it out 
-    # automatically via your existing filepath-parsing logic!
-    date_pairs = None 
+        date_pairs = args.date_pairs
 
     # 2. Setup the output directory
-    # Result: /out/dir/<campaign>/
     campaign_out_dir = Path(args.out_dir) / args.campaign
     campaign_out_dir.mkdir(parents=True, exist_ok=True)
     zarr_out_path = str(campaign_out_dir / "assembled_data.zarr")
 
     # 3. Run the pipeline
+    logger.info(f"Target Zarr store: {zarr_out_path}")
     assemble_data_largeaoi(
         master_aoi=master_aoi,
         flight_ids=flight_ids,
@@ -77,4 +102,4 @@ if __name__ == "__main__":
         fp_snowclimate=args.sc_dir
     )
     
-    logger.info(f"Finished {args.campaign}. Data saved to {zarr_out_path}")
+    logger.info(f"Finished {args.campaign}. Data saved successfully.")
