@@ -2,6 +2,7 @@ import argparse
 import sys
 import logging
 import pandas as pd
+import geopandas as gpd
 from pathlib import Path
 from shapely.wkt import loads
 from shapely.ops import unary_union  # <-- Added for geometry merging
@@ -37,7 +38,7 @@ if __name__ == "__main__":
     # 1. Deduce missing info from Parquet if needed
     if not args.aoi_wkt or not args.flight_ids or not args.date_pairs:
         logger.info("Missing arguments. Looking up in Parquet index...")
-        df_index = pd.read_parquet(args.parquet_index)
+        df_index = gpd.read_parquet(args.parquet_index)
         
         # Filter to just this campaign
         campaign_df = df_index[df_index['flight_path'] == args.campaign]
@@ -54,7 +55,7 @@ if __name__ == "__main__":
             master_aoi = loads(args.aoi_wkt)
         else:
             # Load all WKT geometries for this campaign into Shapely Polygons
-            geometries = [loads(wkt) for wkt in campaign_df['aoi_geometry']]
+            geometries = campaign_df['geometry'].tolist()
             # Merge them into a single shape, then get the rectangular bounding envelope
             merged_aoi = unary_union(geometries).envelope
             master_aoi = merged_aoi
@@ -88,7 +89,7 @@ if __name__ == "__main__":
     # 2. Setup the output directory
     campaign_out_dir = Path(args.out_dir) / args.campaign
     campaign_out_dir.mkdir(parents=True, exist_ok=True)
-    zarr_out_path = str(campaign_out_dir / "assembled_data.zarr")
+    zarr_out_path = str(campaign_out_dir)
 
     # 3. Run the pipeline
     logger.info(f"Target Zarr store: {zarr_out_path}")

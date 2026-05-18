@@ -5,18 +5,18 @@
 #SBATCH -N 1
 #SBATCH -p bsudfq
 #SBATCH -t 12:00:00
-#SBATCH --array=0-2   # <-- Adjust based on number of campaigns (0 to N-1)
+#SBATCH --array=0   # <-- Adjust based on number of campaigns (0 to N-1)
 
 # 1. Define your array of campaigns
 # (Make sure the array length matches your #SBATCH --array limit above!)
-CAMPAIGNS=("lowman" "mores_creek" "grand_mesa")
+CAMPAIGNS=("sierra")
 
 # Get the specific campaign for this array task
 CURRENT_CAMPAIGN=${CAMPAIGNS[$SLURM_ARRAY_TASK_ID]}
 
 # 2. Define standard directories
 OUT_DIR="/bsuhome/julialober/scratch/coherence_data/stacks"
-COH_DIR="/bsuhome/julialober/scratch/coherence_data/uavsar_cohs"
+COH_DIR="/bsuhome/julialober/scratch/coherence_data/uavsar_cohs/${CURRENT_CAMPAIGN}"
 INC_DIR="/bsuhome/julialober/scratch/coherence_data/inc_angle"
 SC_DIR="/bsuhome/julialober/scratch/coherence_data/NSIDC-0768"
 PARQUET_IDX="/bsuhome/julialober/scratch/coherence_data/campaign_summary_index.parquet"
@@ -29,7 +29,7 @@ DATE_PAIRS=""
 echo "Starting job for campaign: $CURRENT_CAMPAIGN"
 
 # 3. Build the Python command
-CMD="/bsuhome/julialober/miniforge3/envs/coherence_clean/bin/python run_campaign.py \
+CMD="/bsuhome/julialober/miniforge3/envs/coherence_v2/bin/python run_assemble/run_assemble_campaign.py \
     --campaign $CURRENT_CAMPAIGN \
     --out-dir $OUT_DIR \
     --coh-dir $COH_DIR \

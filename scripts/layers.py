@@ -27,8 +27,8 @@ from rasterio.vrt import WarpedVRT
 from rasterio.enums import Resampling
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-# from scripts.validation import validate_aoi, validate_date_pairs, make_reference_grid, validate_alignment
-from validation import validate_aoi, validate_date_pairs, make_reference_grid, validate_alignment
+from scripts.validation import validate_aoi, validate_date_pairs, make_reference_grid, validate_alignment
+# from validation import validate_aoi, validate_date_pairs, make_reference_grid, validate_alignment
 
 logger = logging.getLogger(__name__)
 
@@ -480,6 +480,8 @@ def assemble_data_largeaoi(
                 if set(tile_ds[c].dims).isdisjoint(_spatial_dims)
             ]
             tile_ds_for_write = tile_ds.drop_vars(_coords_to_drop)
+            for var in tile_ds_for_write.variables:
+                tile_ds_for_write[var].attrs.pop('_FillValue', None)
             tile_ds_for_write.to_zarr(fp_dest, region=region)
             logger.info(
                 "Tile %d/%d written to Zarr (x=%d:%d, y=%d:%d)",
@@ -626,7 +628,7 @@ def get_uavsar_coherence(
             # Create a pair coordinate name (e.g. '210210_210224').
             pair_name = f"{date_str1}_{date_str2}"
 
-            search_pattern = f"*{fid}*{date_str1}*{date_str2}*VV_s2*int_coh*" # TODO - pass in all other parameters needed to uniquely identify the coherence file.
+            search_pattern = f"*{fid}*{date_str1}*{date_str2}*VV_s1*int_coh*" # TODO - pass in all other parameters needed to uniquely identify the coherence file.
             found_files = list(flight_dir.glob(search_pattern))
 
             if not found_files:
@@ -753,7 +755,7 @@ def get_uavsar_incidence(
     )
 
     for fid in flight_ids:
-        search_pattern = f"*{fid}*s2.inc.tif"
+        search_pattern = f"*{fid}*s1.inc.tif"
         found_files = list(fp_inc.glob(search_pattern))
 
         if not found_files:

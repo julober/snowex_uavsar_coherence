@@ -54,7 +54,7 @@ def generate_index(root_dir, output_parquet):
             data.append({
                 'flight_path': meta['flight_path'],
                 'flight_num': meta['flight_num'],
-                'date_pair': (meta['date1'], meta['date2']),
+                'date_pair': ('20' + meta['date1'], '20' + meta['date2']),
                 'full_path': str(tif)
             })
 
