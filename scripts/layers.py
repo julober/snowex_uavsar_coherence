@@ -91,6 +91,7 @@ def assemble_data(
     tile_aoi: Polygon,
     date_pairs: List[Tuple[date, date]],
     flight_ids: List[str],
+    include_layers: Optional[List[str]] = None, # <-- New parameter
     fp_coh: str = '../data/coherence/',
     fp_inc: str = '../data/inc_angle/',
     fp_snowclimate: str = '../data/NSIDC-0768/',
@@ -99,166 +100,171 @@ def assemble_data(
     aorc_ds: Optional[xr.Dataset] = None,
 ) -> xr.Dataset:
     """
-    Fetch, align, and return all data layers for a single spatial tile.
-
-    This is a **pure function**: it reads from disk and remote APIs, aligns
-    everything to a reference grid derived from ``tile_aoi``, and returns the
-    merged in-memory :class:`xarray.Dataset`.  No data is written to disk.
-    Use :func:`assemble_data_largeaoi` to process a large master AOI by
-    splitting it into tiles and writing each tile to a Zarr store.
-
-    The caller is responsible for ensuring that ``date_pairs`` corresponds to
-    actual UAVSAR acquisition dates.
-
+    Fetch, align, and return a customizable list of data layers for a single spatial tile.
+    ...
+    
     Parameters
     ----------
-    tile_aoi:
-        Small spatial tile (a Shapely Polygon) representing the chunk of the
-        master extent to be processed.  Must be given in the coordinate system
-        specified by ``crs``.
-    date_pairs:
-        List of ``(start_date, end_date)`` tuples defining the UAVSAR
-        coherence intervals.
-    flight_ids:
-        List of UAVSAR flight-heading identifiers (e.g. ``['08508', '26505']``).
-    fp_coh:
-        Directory containing per-flight coherence ``.tif`` files.
-    fp_inc:
-        Directory containing pre-calculated incidence angle ``.tif`` files.
-    fp_snowclimate:
-        Directory containing the NSIDC-0768 snow-climatology NetCDF file.
-    crs:
-        Coordinate reference system string (default ``'EPSG:4326'``).
-    res:
-        Target spatial resolution in metres (default ``30``).
-    aorc_ds:
-        Optional pre-fetched AORC metrics dataset covering the full master
-        AOI (computed once by :func:`assemble_data_largeaoi` before the tile
-        loop).  When provided, the S3 fetch is skipped and ``aorc_ds`` is
-        clipped to ``tile_aoi`` and reprojected to the tile reference grid
-        instead.  When ``None`` (default), :func:`get_aorc_layers` is called
-        as usual to fetch AORC data from S3 for this tile.
-
-    Returns
-    -------
-    xr.Dataset
-        Merged dataset containing all assembled data layers for this tile.
+    ...
+    include_layers:
+        List of strings specifying which layers to generate. Choose from:
+        ['coh', 'incidence', 'dem', 'topo', 'nlcd', 'snow_class', 'aorc', 'swe'].
+        If None, all layers are assembled by default.
     """
 
     logger.info("Starting tile data assembly for flights %s", flight_ids)
 
-    # 1. Validate inputs
+    # 1. Define and Validate Allowed Layers
+    ALL_AVAILABLE_LAYERS = ['coh', 'incidence', 'dem', 'topo', 'nlcd', 'snow_class', 'aorc', 'swe']
+    if include_layers is None:
+        include_layers = ALL_AVAILABLE_LAYERS.copy()
+    else:
+        # Check for invalid layer tokens
+        invalid_layers = [l for l in include_layers if l not in ALL_AVAILABLE_LAYERS]
+        if invalid_layers:
+            raise ValueError(
+                f"Requested unavailable layers: {invalid_layers}. "
+                f"Allowed tokens are: {ALL_AVAILABLE_LAYERS}"
+            )
+
+    # 2. Validate spatial inputs
     tile_aoi = validate_aoi(tile_aoi)
     date_pairs = validate_date_pairs(date_pairs)
     logger.debug("Tile AOI validated; %d date pairs provided", len(date_pairs))
 
-    # 2. Create tile reference grid
+    # 3. Create tile reference grid
     crs_obj = ProjCRS.from_user_input(crs)
     if crs_obj.is_geographic:
-        # Convert the requested metric resolution to arc-degrees at ~45° latitude.
         res_grid = res / METRES_PER_DEGREE_AT_45_LAT
         tile_ref = make_reference_grid(aoi=tile_aoi, crs=crs, resolution=res_grid)
     else:
-        # Projected CRS: resolution is already in metres.
-        wgs84 = ProjCRS('EPSG:4326')
         res_grid = float(res)
         tile_ref = make_reference_grid(aoi=tile_aoi, crs=crs, resolution=res_grid)
         tile_aoi_proj = tile_aoi
 
-        # get tile_aoi in WGS84 for APIs
         project = Transformer.from_crs(crs_obj, wgs84, always_xy=True).transform
         tile_aoi = transform(project, tile_aoi_proj)
         crs = 'EPSG:4326'
 
     logger.debug("Tile reference grid created with resolution %g (CRS units)", res_grid)
 
-    # 3. Get UAVSAR coherence layers
-    s = time.time()
-    coh = get_uavsar_coherence(
-        tile_aoi=tile_aoi,
-        date_pairs=date_pairs,
-        flight_ids=flight_ids,
-        crs=crs,
-        tile_ref_grid=tile_ref,
-        fp=fp_coh,
-    )
-    e = time.time()
-    logger.info("Tile: loaded coherence for flights %s in %.3f seconds.", flight_ids, e - s)
-    logger.debug("Tile coherence dataset shape: %s", dict(coh.sizes))
+    # Container to collect initialized Xarray objects
+    ds_list = []
 
-    # 4. Get incidence angle
-    s = time.time()
-    incidence = get_uavsar_incidence(
-        tile_aoi=tile_aoi,
-        flight_ids=flight_ids,
-        fp_inc=fp_inc,
-        tile_ref_grid=tile_ref,
-        crs=crs,
-    )
-    e = time.time()
-    logger.info("Tile: loaded incidence angles for flights %s in %.3f seconds.", flight_ids, e - s)
+    # 4. Get UAVSAR coherence layers
+    if 'coh' in include_layers:
+        s = time.time()
+        coh = get_uavsar_coherence(
+            tile_aoi=tile_aoi,
+            date_pairs=date_pairs,
+            flight_ids=flight_ids,
+            crs=crs,
+            tile_ref_grid=tile_ref,
+            fp=fp_coh,
+        )
+        logger.info("Tile: loaded coherence for flights %s in %.3f seconds.", flight_ids, time.time() - s)
+        ds_list.append(coh)
 
-    # 5. Get DEM
-    s = time.time()
-    try:
-        dem = py3dep.get_dem(geometry=tile_aoi, resolution=res, crs=crs)
-    except Exception as exc:
-        logger.error("py3dep.get_dem failed: %s", exc)
-        raise
-    dem.rio.write_crs(crs)
-    dem = dem.rio.reproject_match(tile_ref)
-    e = time.time()
-    logger.info("Tile: got DEM in %.3f seconds.", e - s)
+    # 5. Get incidence angle
+    if 'incidence' in include_layers:
+        s = time.time()
+        incidence = get_uavsar_incidence(
+            tile_aoi=tile_aoi,
+            flight_ids=flight_ids,
+            fp_inc=fp_inc,
+            tile_ref_grid=tile_ref,
+            crs=crs,
+        )
+        logger.info("Tile: loaded incidence angles for flights %s in %.3f seconds.", flight_ids, time.time() - s)
+        ds_list.append(incidence)
 
-    s = time.time()
-    topo = get_topo_layers(dem=dem, tile_ref_grid=tile_ref)
-    e = time.time()
-    logger.info("Tile: got topo layers: %s in %.3f seconds.", list(topo.keys()), e - s)
+    # 6. Get DEM and Topo (Topo handles a hard dependency on DEM)
+    if 'dem' in include_layers or 'topo' in include_layers:
+        s = time.time()
+        try:
+            dem = py3dep.get_dem(geometry=tile_aoi, resolution=res, crs=crs)
+        except Exception as exc:
+            logger.error("py3dep.get_dem failed: %s", exc)
+            raise
+        dem.rio.write_crs(crs)
+        dem = dem.rio.reproject_match(tile_ref)
+        logger.info("Tile: got DEM in %.3f seconds.", time.time() - s)
+        
+        if 'dem' in include_layers:
+            ds_list.append(dem)
 
-    # 6. Get NLCD layers
-    s = time.time()
-    nlcd = get_nlcd_layers(tile_aoi=tile_aoi, crs=crs, tile_ref_grid=tile_ref)
-    e = time.time()
-    logger.info("Tile: got NLCD %s in %.3f seconds.", list(nlcd.keys()), e - s)
+        if 'topo' in include_layers:
+            s = time.time()
+            topo = get_topo_layers(dem=dem, tile_ref_grid=tile_ref)
+            logger.info("Tile: got topo layers: %s in %.3f seconds.", list(topo.keys()), time.time() - s)
+            ds_list.append(topo)
 
-    s = time.time()
-    snow_class = get_snow_climatology(tile_aoi=tile_aoi, crs=crs, fp=fp_snowclimate, tile_ref_grid=tile_ref)
-    e = time.time()
-    logger.info("Tile: got snow climatology: %s in %.3f seconds.", list(snow_class.keys()), e - s)
+    # 7. Get NLCD layers
+    if 'nlcd' in include_layers:
+        s = time.time()
+        nlcd = get_nlcd_layers(tile_aoi=tile_aoi, crs=crs, tile_ref_grid=tile_ref)
+        logger.info("Tile: got NLCD %s in %.3f seconds.", list(nlcd.keys()), time.time() - s)
+        ds_list.append(nlcd)
 
-    # 7. Get AORC meteorological layers
-    s = time.time()
-    if aorc_ds is not None:
-        # Fast path: clip the pre-fetched master AORC metrics to this tile's
-        # extent and reproject to the tile reference grid.  Avoids repeated
-        # S3 fetches and Dask graph rebuilds inside the tile loop.
-        g = gpd.GeoSeries([tile_aoi], crs=crs)
-        aorc = aorc_ds.rio.clip(g.geometry.values, crs=crs)
-        aorc = aorc.rio.reproject_match(tile_ref)
-    else:
-        aorc = get_aorc_layers(tile_aoi=tile_aoi, date_pairs=date_pairs, crs=crs, tile_ref_grid=tile_ref)
-    e = time.time()
-    logger.info("Tile: got AORC: %s in %.3f seconds.", list(aorc.keys()), e - s)
+    # 8. Get Snow Climatology
+    if 'snow_class' in include_layers:
+        s = time.time()
+        snow_class = get_snow_climatology(tile_aoi=tile_aoi, crs=crs, fp=fp_snowclimate, tile_ref_grid=tile_ref)
+        logger.info("Tile: got snow climatology: %s in %.3f seconds.", list(snow_class.keys()), time.time() - s)
+        ds_list.append(snow_class)
 
-    # 8. Get UCLA SWE/SD layers
-    s = time.time()
-    snow = get_snow_layers(tile_aoi=tile_aoi, date_pairs=date_pairs, crs=crs, tile_ref_grid=tile_ref)
-    e = time.time()
-    logger.info("Tile: got SWE layers: %s in %.3f seconds.", list(snow.keys()), e - s)
+    # 9. Get AORC meteorological layers
+    if 'aorc' in include_layers:
+        s = time.time()
+        if aorc_ds is not None:
+            g = gpd.GeoSeries([tile_aoi], crs=crs)
+            aorc = aorc_ds.rio.clip(g.geometry.values, crs=crs)
+            aorc = aorc.rio.reproject_match(tile_ref)
+        else:
+            aorc = get_aorc_layers(tile_aoi=tile_aoi, date_pairs=date_pairs, crs=crs, tile_ref_grid=tile_ref)
+        logger.info("Tile: got AORC: %s in %.3f seconds.", list(aorc.keys()), time.time() - s)
+        ds_list.append(aorc)
 
-    ds_list = [coh, incidence, dem, topo, nlcd, snow_class, snow, aorc]
-    validate_alignment(ds_list)
-    logger.debug("Tile: all layers validated for spatial alignment")
+    # 10. Get UCLA SWE/SD layers
+    if 'swe' in include_layers:
+        s = time.time()
+        snow = get_snow_layers(tile_aoi=tile_aoi, date_pairs=date_pairs, crs=crs, tile_ref_grid=tile_ref)
+        logger.info("Tile: got SWE layers: %s in %.3f seconds.", list(snow.keys()), time.time() - s)
+        ds_list.append(snow)
 
-    ds = xr.merge(ds_list, join='exact', compat='minimal')
-    logger.info("Tile: merged %d layers into a single dataset", len(ds_list))
+    if not ds_list:
+        raise ValueError("No layers were specified for compilation.")
 
-    # Fix OOM masking: use lazy .isnull() instead of .values which forces eager
-    # evaluation of the entire array into RAM.
-    nan_mask = ds['coherence'].isnull().all(dim=('flight_id', 'pair'))
-    for var in ds.data_vars:
-        if 'x' in ds[var].dims and 'y' in ds[var].dims:
-            ds[var] = ds[var].where(~nan_mask, drop=False)
+    # 11. UNIFORM TEMPORAL ALIGNMENT & ORDERING FIX
+    # Create an explicit 1D list of standardized sorted string labels matching '%y%m%d_%y%m%d'
+    master_str_labels = sorted([
+        f"{d1.strftime('%y%m%d')}_{d2.strftime('%y%m%d')}" for d1, d2 in date_pairs
+    ])
+
+    standardized_ds_list = []
+    for obj in ds_list:
+        if 'pair' in obj.dims:
+            # Cast elements to native Python strings to rule out Numpy type/byte-order issues
+            clean_str_coords = [str(p) for p in obj.pair.values]
+            obj = obj.assign_coords(pair=clean_str_coords)
+            # Reindex reshuffles the labels and forces conformance to the exact order of master_str_labels
+            obj = obj.reindex(pair=master_str_labels)
+        standardized_ds_list.append(obj)
+
+    # 12. Validation and exact merge
+    if not validate_alignment(standardized_ds_list):
+        raise ValueError("Alignment issues detected across layers.")
+    logger.debug("Tile: all layers validated for spatial and temporal alignment")
+
+    ds = xr.merge(standardized_ds_list, join='exact', compat='minimal')
+    logger.info("Tile: merged %d layers into a single dataset", len(standardized_ds_list))
+
+    # 13. Lazy OOM masking (safe check in case 'coherence' layer wasn't requested)
+    if 'coherence' in ds.data_vars:
+        nan_mask = ds['coherence'].isnull().all(dim=('flight_id', 'pair'))
+        for var in ds.data_vars:
+            if 'x' in ds[var].dims and 'y' in ds[var].dims:
+                ds[var] = ds[var].where(~nan_mask, drop=False)
 
     return ds
 
@@ -480,9 +486,15 @@ def assemble_data_largeaoi(
                 if set(tile_ds[c].dims).isdisjoint(_spatial_dims)
             ]
             tile_ds_for_write = tile_ds.drop_vars(_coords_to_drop)
+
+            # tile_ds_for_write = tile_ds_for_write.reindex(pair=master_pairs)
+
+            problem_keys = ['_FillValue', 'add_offset', 'scale_factor', 'missing_value']
             for var in tile_ds_for_write.variables:
-                tile_ds_for_write[var].attrs.pop('_FillValue', None)
-            tile_ds_for_write.to_zarr(fp_dest, region=region)
+                for key in problem_keys:
+                    tile_ds_for_write[var].attrs.pop(key, None)
+                    tile_ds_for_write.to_zarr(fp_dest, region=region)
+
             logger.info(
                 "Tile %d/%d written to Zarr (x=%d:%d, y=%d:%d)",
                 tile_num, total_tiles,
@@ -1142,8 +1154,8 @@ def get_snow_metrics(
     valid_metrics = [
         'swe_accum',
         'swe_ablate',
-        'density_change',
-        'big_accum',
+        # 'density_change',
+        # 'big_accum',
         'snow_status_change',
     ]
 
@@ -1409,11 +1421,11 @@ def get_aorc_metrics(
     valid_metrics = [
         'mean_temp',
         'max_temp',
-        'total_posdeg',
-        'temp_diff',
-        'temp_diff_acq',
-        'freeze_thaw_cycles',
-        'diurnal_temp_range',
+        # 'total_posdeg',
+        # 'temp_diff',
+        # 'temp_diff_acq',
+        # 'freeze_thaw_cycles',
+        # 'diurnal_temp_range',
         'total_precip',
         'avg_precip',
         'total_rain',
