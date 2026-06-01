@@ -297,66 +297,105 @@ def make_reference_grid(
 
 import xarray as xr
 
-def validate_alignment(
-    datasets, 
-    coord_names=['y', 'x']
-):
+def validate_alignment(datasets, coord_names=['y', 'x']):
     """
-    Checks if a list of xarray objects share identical coordinate values.
-    
-    Args:
-        datasets (list): List of xr.Dataset or xr.DataArray objects.
-        coord_names (list): The specific coordinates to verify (default: lat/lon).
-        
-    Returns:
-        bool: True if all match perfectly, False otherwise.
+    Checks if a list of xarray objects share identical coordinate values for 
+    spatial (x, y) and temporal (pair) dimensions.
     """
     errors = []
+    pair_mismatches = []
     
-    # 1. Check if all datasets actually contain the required coordinates
+    # 1. Basic Coordinate Presence Check
     for i, ds in enumerate(datasets):
         missing = [c for c in coord_names if c not in ds.coords]
         if missing:
-            errors.append(f"Dataset [{i}] is missing coordinates: {missing}")
+            errors.append(f"Dataset [{i}] is missing spatial coordinates: {missing}")
 
-    if errors:
-        for error in errors:
-            print(error)
-        return False
+    # 2. Detailed 'pair' Dimension Check
+    # Filter for datasets that actually have a temporal 'pair' dimension
+    temporal_ds = [(i, ds) for i, ds in enumerate(datasets) if 'pair' in ds.dims]
+    
+    if len(temporal_ds) > 1:
+        # Use the first temporal dataset as the reference
+        ref_idx, ref_ds = temporal_ds[0]
+        ref_pairs = ref_ds['pair'].values
+        ref_type = type(ref_pairs[0])
+        
+        for idx, ds in temporal_ds[1:]:
+            curr_pairs = ds['pair'].values
+            curr_type = type(curr_pairs[0])
+            
+            # Check for Type Mismatch (e.g., str vs Timestamp)
+            if ref_type != curr_type:
+                pair_mismatches.append(
+                    f"Type Mismatch: Dataset [{idx}] is {curr_type}, but Dataset [{ref_idx}] is {ref_type}."
+                )
+            
+            # Check for Value/Length Mismatch
+            if not np.array_equal(ref_pairs, curr_pairs):
+                # Find the specific differences
+                set_ref = set(ref_pairs)
+                set_curr = set(curr_pairs)
+                
+                missing_in_curr = set_ref - set_curr
+                extra_in_curr = set_curr - set_ref
+                
+                msg = f"Value Mismatch in Dataset [{idx}]:"
+                if missing_in_curr:
+                    msg += f"\n   - Missing: {list(missing_in_curr)}"
+                if extra_in_curr:
+                    msg += f"\n   - Unexpected: {list(extra_in_curr)}"
+                if not (missing_in_curr | extra_in_curr): 
+                    msg += f"\n   {curr_pairs}"
+                pair_mismatches.append(msg)
 
-    # check that datasets with pair dimensions have the same values
-    for i, ds in enumerate(datasets):
-        if 'pair' in ds.dims:
-            pair_values = ds['pair'].values
-            for j, other_ds in enumerate(datasets):
-                if i != j and 'pair' in other_ds.dims:
-                    other_pair_values = other_ds['pair'].values
-                    if not np.array_equal(pair_values, other_pair_values):
-                        errors.append(f"Dataset [{i}] has different 'pair' values than Dataset [{j}].")
-
-    # 2. Try to align them using 'exact' join
+    # 3. Spatial Alignment using xarray's internal check
+    spatial_match = True
     try:
-        # If they don't match perfectly, xarray raises a ValueError
         xr.align(*datasets, join="exact")
-        # print("Validation Passed: All grids match perfectly.")
-        return True
-        
     except ValueError as e:
-        print("Grid mismatch detected.")
-        print("-" * 55)
-        
-        # 3. Generate the Overview Output
-        header = f"{'Index':<7} | {'Name':<15} | " + " | ".join([f"{c:<10}" for c in coord_names])
+        spatial_match = False
+        spatial_error_msg = str(e)
+
+    # 4. Final Reporting
+    if not spatial_match or pair_mismatches or errors:
+        print("\n" + "!"*60)
+        print("ALIGNMENT VALIDATION FAILED")
+        print("!"*60)
+
+        # Print the Summary Table
+        header = f"{'Index':<7} | {'Name':<15} | " + " | ".join([f"{c:<10}" for c in coord_names]) + f" | {'pair':<10}"
         print(header)
-        print("-" * 55)
+        print("-" * len(header))
         
         for i, ds in enumerate(datasets):
-            # Get the size of the requested coordinates
-            dims_str = " | ".join([f"{ds[c].size:<10}" for c in coord_names if c in ds.coords])
-            name = getattr(ds, 'name', None) or f'Dataset_{i}'
-            print(f"{i:<7} | {str(name)[:15]:<15} | {dims_str}")
+            dims_str = " | ".join([f"{ds[c].size:<10}" if c in ds.coords else f"{'N/A':<10}" for c in coord_names])
+            pair_str = f"{ds.sizes['pair']:<10}" if 'pair' in ds.dims else f"{'N/A':<10}"
+            if isinstance(ds, xr.Dataset):
+                name = getattr(ds, 'name', None) or (list(ds.data_vars)[0] if ds.data_vars else f"DS_{i}")
+            elif isinstance(ds, xr.DataArray):
+                name = ds.name or f"Array_{i}"
+            else:
+                name = f"Obj_{i}"
+            print(f"{i:<7} | {str(name)[:15]:<15} | {dims_str} | {pair_str}")
+        
+        print("-" * len(header))
+
+        # Report Specific Pair Issues
+        if pair_mismatches:
+            print("\nTEMPORAL ('pair') ERRORS:")
+            for pm in pair_mismatches:
+                print(f"  * {pm}")
+
+        # Report Spatial Issues
+        if not spatial_match:
+            print(f"\nSPATIAL ERROR DETAIL:\n  * {spatial_error_msg}")
             
-        print("-" * 55)
-        print(f"Error Detail: {e}")
+        # Report Missing Coord Issues
+        for err in errors:
+            print(f"  * {err}")
+
         return False
+
+    return True
     
