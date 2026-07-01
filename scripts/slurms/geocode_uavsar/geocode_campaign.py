@@ -82,14 +82,26 @@ def main():
             swath = parts[8]      # s1
             looks = parts[9]      # 2x8
 
-            # Reconstruct the LLH and LKV filenames
-            llh_name = f"{site}_{line}_{segment_id}_{pol}_{swath}_{looks}.llh"
-            lkv_name = f"{site}_{line}_{segment_id}_{pol}_{swath}_{looks}.lkv"
+            # Create a prefix that includes everything EXCEPT the grid size / looks
+            base_prefix = f"{site}_{line}_{segment_id}_{pol}_{swath}_"
             
-            llh_fp = flight_dir / llh_name
+            # --- Flexible LLH Discovery ---
+            exact_llh = flight_dir / f"{base_prefix}{looks}.llh"
+            possible_llhs = list(flight_dir.glob(f"{base_prefix}*.llh"))
+            
+            if exact_llh.exists():
+                llh_fp = exact_llh
+            elif possible_llhs:
+                llh_fp = possible_llhs[0]
+                logging.info(f"  --> Exact LLH ({looks}) not found. Falling back to: {llh_fp.name}")
+            else:
+                logging.warning(f"Missing any LLH file matching {base_prefix}*.llh for {base_name}. Skipping.")
+                continue
+
+            # --- Strict LKV & ANN Definitions ---
+            lkv_name = f"{base_prefix}{looks}.lkv"
             lkv_fp = flight_dir / lkv_name
             
-            # Reconstruct the ANN filename
             ann_name = "_".join(parts[:8]) + ".ann"
             ann_fp = flight_dir / ann_name
 
@@ -101,10 +113,6 @@ def main():
                 else:
                     logging.warning(f"Missing ANN file for {base_name}. Skipping.")
                     continue
-
-            if not llh_fp.exists():
-                logging.warning(f"Missing LLH file {llh_name} for {base_name}. Skipping.")
-                continue
 
             # Save the original directory so we can return to it safely
             original_cwd = os.getcwd()
