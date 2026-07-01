@@ -1172,7 +1172,7 @@ def get_snow_metrics(
 
     if 'swe_accum' in metrics:
         # Mean of only the positive daily SWE changes (new snow mass).
-        out['swe_accum'] = swe_diff.where(swe_diff > 0, other=0).mean(dim='time') 
+        out['swe_accum'] = swe_diff.where(swe_diff > 0, other=0)#.mean(dim='time') 
 
     if 'big_accum' in metrics:
         # Value of 1 if there was any positive daily SWE change > 1 m (heavy snowfall event), else 0.
