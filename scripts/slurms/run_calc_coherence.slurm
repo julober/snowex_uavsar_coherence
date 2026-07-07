@@ -51,15 +51,15 @@ echo "Output Dir:     ${OUTPUT_DIRECTORY}"
 #    - crosspol            (HV vs. VH cross-polarization pairs, same flight/date/segment)
 MODE="crosspol"
 
-# 6. Set the square window size for the coherence averaging filter (default: 5)
-WINDOW_SIZE=5
+# 6. Set the rectangular window size for the coherence averaging filter (row col)
+WINDOW_SIZE=(5 11)
 
 # 7. Optional polarization filter for interferometric mode (HH, HV, VH, VV).
 #    Leave empty ("") to process all polarizations.
 POLARIZATION="VV"
 
 echo "Mode:           ${MODE}"
-echo "Window Size:    ${WINDOW_SIZE}"
+echo "Window Size:    ${WINDOW_SIZE[*]}"
 echo "Polarization:   ${POLARIZATION:-all}"
 
 # 8. Build the optional --polarization flag
@@ -73,7 +73,7 @@ fi
     --input_dir   "${FLIGHT_DIR}" \
     --out_dir     "${OUTPUT_DIRECTORY}" \
     --mode        "${MODE}" \
-    --window_size "${WINDOW_SIZE}" \
+    --window_size "${WINDOW_SIZE[@]}" \
     ${POL_FLAG}
 
 echo "Coherence calculation complete for ${FLIGHT_DIR}!"

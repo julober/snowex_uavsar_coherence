@@ -129,7 +129,7 @@ def calculate_coherence(
     file1_path: Path,
     file2_path: Path,
     out_path: Path,
-    window_size: int = 5,
+    window_size: tuple[int, int] = (5, 5),
 ) -> None:
     """
     Compute SAR coherence between two geocoded complex TIF files and save the result.
@@ -142,10 +142,15 @@ def calculate_coherence(
         Path to the second input complex TIF file.
     out_path : Path
         Path where the output coherence TIF will be written.
-    window_size : int
-        Side length (in pixels) of the square uniform averaging window.
+    window_size : tuple[int, int]
+        Rectangular averaging window as ``(row_window_size, col_window_size)``.
     """
-    coherence_mag = calc_coherence(file1_path, file2_path, window_size=(window_size, window_size))
+    row_win, col_win = window_size
+    coherence_mag = calc_coherence(
+        file1_path,
+        file2_path,
+        window_size=(row_win, col_win),
+    )
 
     with rasterio.open(file1_path) as src:
         profile = src.profile.copy()
