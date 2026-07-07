@@ -69,8 +69,10 @@ def main():
             dem_4326 = py3dep.get_dem(geometry=aoi_4326, resolution=10, crs="EPSG:4326") 
 
             # --- 3. Reproject to UTM Zone 11N (Meters) ---
-            utm_crs = "EPSG:32611" # Lowman, ID is in UTM Zone 11N
+            #utm_crs = "EPSG:32611" # Lowman, ID is in UTM Zone 11N
             res_m = 5.556          # Standard UAVSAR pixel resolution in meters
+            utm_crs = lkv_x_4326.rio.estimate_utm_crs()
+            logger.info(f"  -> Automatically selected local UTM CRS: {utm_crs}")
 
             logger.info(f"  -> Reprojecting arrays to {utm_crs}...")
             lkv_x_utm = lkv_x_4326.rio.reproject(utm_crs, resolution=res_m)

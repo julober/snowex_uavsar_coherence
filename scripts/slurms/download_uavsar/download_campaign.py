@@ -27,14 +27,16 @@ def main():
                 getann=True,
                 getllh=True,
                 getlkv=True,
-                pol=['HH', 'HV', 'VH', 'VV'])
+                pol=['HH', 'HV', 'VH', 'VV'],
+                pxlsp=['1x1'])
                 #tag=['BU','BC'])
     else: 
         links_dict = get_uavsar_slcs(flight_name=campaign,
                 getann=True,
                 getllh=True,
                 getlkv=True,
-                pol=['HH', 'HV', 'VH', 'VV'])
+                pol=['HH', 'HV', 'VH', 'VV'],
+                pxlsp=['1x1'])
 
     if not links_dict:
         print(f"No files found for campaign: {campaign}")
