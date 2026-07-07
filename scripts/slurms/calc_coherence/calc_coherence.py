@@ -15,7 +15,7 @@ python calc_coherence/calc_coherence.py \
     --input_dir /path/to/geoslcs \
     --out_dir   /path/to/coherence \
     --mode      interferometric \
-    --window_size 5 \
+    --window_size 5 11 \
     --polarization HH
 """
 
@@ -84,7 +84,7 @@ def parse_filename(path: Path) -> dict | None:
 def run_interferometric(
     files: list[dict],
     out_dir: Path,
-    window_size: int,
+    window_size: tuple[int, int],
     polarization: str | None = None,
 ) -> None:
     """
@@ -100,8 +100,9 @@ def run_interferometric(
         Parsed file records (output of :func:`parse_filename`).
     out_dir : Path
         Root output directory.
-    window_size : int
-        Square window size for the coherence calculation.
+    window_size : tuple[int, int]
+        Rectangular window size for the coherence calculation as
+        ``(row_window_size, col_window_size)``.
     polarization : str or None
         If provided, only process groups whose polarization matches this value
         (e.g. ``"HH"``, ``"HV"``).  When *None* all polarizations are processed.
@@ -143,7 +144,7 @@ def run_interferometric(
                 continue
 
             out_name = (
-                f"{site}_{flight}_{date1}_{date2}_{pol}_{segment}_w{window_size}_int_coh.tif"
+                f"{site}_{flight}_{date1}_{date2}_{pol}_{segment}_w{window_size[0]}x{window_size[1]}_int_coh.tif"
             )
             out_path = group_out_dir / out_name
 
@@ -170,7 +171,7 @@ def run_interferometric(
 def run_crosspol(
     files: list[dict],
     out_dir: Path,
-    window_size: int,
+    window_size: tuple[int, int],
 ) -> None:
     """
     Calculate cross-polarization (HV/VH) coherence.
@@ -184,8 +185,9 @@ def run_crosspol(
         Parsed file records (output of :func:`parse_filename`).
     out_dir : Path
         Root output directory.
-    window_size : int
-        Square window size for the coherence calculation.
+    window_size : tuple[int, int]
+        Rectangular window size for the coherence calculation as
+        ``(row_window_size, col_window_size)``.
     """
     logger = logging.getLogger(__name__)
 
@@ -205,7 +207,7 @@ def run_crosspol(
         group_out_dir = Path(out_dir) / site / flight
         group_out_dir.mkdir(parents=True, exist_ok=True)
 
-        out_name = f"{site}_{flight}_{date}_HV-VH_{segment}_w{window_size}_crosspol_coh.tif"
+        out_name = f"{site}_{flight}_{date}_HV-VH_{segment}_w{window_size[0]}x{window_size[1]}_crosspol_coh.tif"
         out_path = group_out_dir / out_name
 
         if out_path.exists():
@@ -260,9 +262,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--window_size",
+        nargs=2,
         type=int,
-        default=5,
-        help="Square window size for the coherence calculation (default: 5).",
+        default=(5, 5),
+        help=(
+            "Rectangular window size for coherence as two integers: "
+            "row_window_size col_window_size (default: 5 5)."
+        ),
     )
     parser.add_argument(
         "--polarization",
@@ -309,10 +315,12 @@ def main() -> None:
         "Successfully parsed %d / %d filenames.", len(parsed), len(all_tifs)
     )
 
+    window_size = tuple(args.window_size)
+
     if args.mode == "interferometric":
-        run_interferometric(parsed, out_dir, args.window_size, polarization=args.polarization)
+        run_interferometric(parsed, out_dir, window_size, polarization=args.polarization)
     else:
-        run_crosspol(parsed, out_dir, args.window_size)
+        run_crosspol(parsed, out_dir, window_size)
 
     logger.info("Done.")
 
