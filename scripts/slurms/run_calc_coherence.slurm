@@ -69,7 +69,7 @@ if [ -n "${POLARIZATION}" ]; then
 fi
 
 # 9. Run the script for this specific flight directory
-/bsuhome/julialober/miniforge3/envs/coherence/bin/python calc_coherence/calc_coherence.py \
+/bsuhome/julialober/miniforge3/envs/coherence_v2/bin/python calc_coherence/calc_coherence.py \
     --input_dir   "${FLIGHT_DIR}" \
     --out_dir     "${OUTPUT_DIRECTORY}" \
     --mode        "${MODE}" \
