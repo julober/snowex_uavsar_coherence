@@ -26,6 +26,7 @@ dependencies:
   - cartopy
   
   # Data Access & Cloud
+  - easysnowdata
   - earthaccess
   - fsspec
   - s3fs
