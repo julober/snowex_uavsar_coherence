@@ -18,8 +18,8 @@ source ~/.bashrc
 
 # 2. Base data directories
 # Change these paths to point to your actual data locations
-BASE_INPUT="/bsuhome/julialober/scratch/coherence_data/uavsar_geoslcs"
-OUTPUT_DIRECTORY="/bsuhome/julialober/scratch/coherence_data/uavsar_cohs"
+BASE_INPUT="/bsuhome/julialober/scratch/coherence_data/uavsar_geoslcs_cropped"
+OUTPUT_DIRECTORY="/bsuhome/julialober/scratch/coherence_data/uavsar_cohs_cropped"
 
 # 3. Build an array of all lowest-level flight directories
 #    Expected layout: BASE_INPUT/<site>/<flight>/
