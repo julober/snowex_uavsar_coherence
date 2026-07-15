@@ -10,15 +10,16 @@
 
 # ----------------- CONFIGURATION -----------------
 # Path to the directory containing your geolocated tifs
-DATA_DIR="/bsuhome/julialober/scratch/coherence_data/uavsar_geoslcs/stlake/27129/"
+DATA_DIR="/bsuhome/julialober/scratch/coherence_data/uavsar_geoslcs/grmesa/27416/"
 
 # Path to the text file containing the list of files to crop
 # for f in `ls /bsuhome/julialober/scratch/coherence_data/uavsar_geoslcs/stlake/27129/*1x1*`; do basename "$f"; done >> stlake_1x1_list.txt
-LIST_FILE="crop_tif/stlake_1x1_list.txt"
+LIST_FILE="crop_tif/grmesa_27416_1x1_list.txt"
 
 # Bounding Box coordinates: minx miny maxx maxy
 # Example layout (Lon_Min Lat_Min Lon_Max Lat_Max)
-BBOX="-111.7332140938517 40.58585096349459 -111.6857755957641 40.60845482790766"
+# BBOX="-111.7332140938517 40.58585096349459 -111.6857755957641 40.60845482790766" # SLC north LCC
+BBOX="-108.2579339076524 38.99561257820081 -108.1334585623525 39.09310506271517" # Gr Mesa
 
 # coords = Polygon([
 #     (-111.7332140938517, 40.6079909188825),

@@ -1,6 +1,8 @@
-#!/usr/bin/env encoding
+#!/usr/bin/env python
 import argparse
 import os
+import sys
+import logging
 from osgeo import gdal
 
 def crop_raster(input_path, bbox, delete_original=False):
@@ -8,13 +10,13 @@ def crop_raster(input_path, bbox, delete_original=False):
     Crops a single GeoTIFF file to the given bounding box using GDAL.
     """
     if not os.path.exists(input_path):
-        print(f"Warning: File not found, skipping: {input_path}")
+        logging.warning(f"File not found, skipping: {input_path}")
         return False
 
     base, ext = os.path.splitext(input_path)
     output_path = f"{base}_cropped{ext}"
     
-    print(f"Processing: {input_path} -> {output_path}")
+    logging.info(f"Processing: {input_path} -> {output_path}")
     
     try:
         # outputBounds expects: [minx, miny, maxx, maxy]
@@ -30,17 +32,17 @@ def crop_raster(input_path, bbox, delete_original=False):
         # Verify output was created successfully before deleting old file
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             if delete_original:
-                print(f"--> Successfully cropped. Deleting original: {input_path}")
+                logging.info(f"--> Successfully cropped. Deleting original: {input_path}")
                 os.remove(input_path)
             else:
-                print(f"--> Successfully cropped. Kept original.")
+                logging.info(f"--> Successfully cropped. Kept original.")
             return True
         else:
-            print(f"Error: Generated output file is empty for {input_path}")
+            logging.error(f"Generated output file is empty for {input_path}")
             return False
             
     except Exception as e:
-        print(f"Failed to crop {input_path}: {e}")
+        logging.error(f"Failed to crop {input_path}: {e}", exc_info=True)
         return False
 
 def main():
@@ -54,18 +56,32 @@ def main():
                         help="Bounding box layout: minx miny maxx maxy (e.g., -118.5 34.0 -118.1 34.4)")
     parser.add_argument("--delete", action="store_true", 
                         help="Delete original files after a successful crop. Default: Keep them.")
+    parser.add_argument("--log-file", default=None,
+                        help="Optional path to a standalone log file. If omitted, logs solely stream to stdout.")
 
     args = parser.parse_args()
 
+    # Configure Logging Handlers
+    handlers = [logging.StreamHandler(sys.stdout)] # Ensures it streams right into Slurm logs
+    if args.log_file:
+        handlers.append(logging.FileHandler(args.log_file))
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s: %(message)s',
+        handlers=handlers,
+        force=True  # Overrides any underlying rasterio/gdal defaults
+    )
+
     # Read target files
     if not os.path.exists(args.file_list):
-        print(f"Error: File list '{args.file_list}' does not exist.")
+        logging.error(f"File list '{args.file_list}' does not exist.")
         return
 
     with open(args.file_list, 'r') as f:
         files = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
 
-    print(f"Found {len(files)} files to process. Target BBox: {args.bbox}")
+    logging.info(f"Found {len(files)} files to process. Target BBox: {args.bbox}")
 
     success_count = 0
     for filename in files:
@@ -75,7 +91,7 @@ def main():
         if crop_raster(filepath, args.bbox, delete_original=args.delete):
             success_count += 1
 
-    print(f"\nDone! Successfully processed {success_count}/{len(files)} files.")
+    logging.info(f"Done! Successfully processed {success_count}/{len(files)} files.")
 
 if __name__ == "__main__":
     main()
