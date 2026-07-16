@@ -7,7 +7,7 @@
 #SBATCH -t 12:00:00                                 # run time (hh:mm:ss)
 #SBATCH --mail-user=julialober@u.boisestate.edu
 #SBATCH --mail-type=END
-#SBATCH --array=1-22%25                            # upper bound auto-trimmed; adjust %N to set max concurrent tasks
+#SBATCH --array=2                            # upper bound auto-trimmed; adjust %N to set max concurrent tasks
 
 echo "Starting coherence calculation (array task ${SLURM_ARRAY_TASK_ID})..."
 echo "Making log dir..."
@@ -52,11 +52,11 @@ echo "Output Dir:     ${OUTPUT_DIRECTORY}"
 MODE="crosspol"
 
 # 6. Set the rectangular window size for the coherence averaging filter (row col)
-WINDOW_SIZE=(5 11)
+WINDOW_SIZE=(12 12)
 
 # 7. Optional polarization filter for interferometric mode (HH, HV, VH, VV).
 #    Leave empty ("") to process all polarizations.
-POLARIZATION="VV"
+POLARIZATION=""
 
 echo "Mode:           ${MODE}"
 echo "Window Size:    ${WINDOW_SIZE[*]}"

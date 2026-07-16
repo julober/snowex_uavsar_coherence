@@ -131,7 +131,8 @@ def run_interferometric(
         group_out_dir = Path(out_dir) / site / flight
         group_out_dir.mkdir(parents=True, exist_ok=True)
 
-        for f1, f2 in itertools.combinations(members, 2):
+        nearest_neighbors_only = True
+        for (i, f1), (j, f2) in itertools.combinations(enumerate(members), 2):
             date1 = f1["date"]
             date2 = f2["date"]
                         
@@ -141,6 +142,9 @@ def run_interferometric(
                     "Skipping self-coherence pair for %s/%s/%s/%s: both dates are %s.",
                     site, flight, pol, segment, date1,
                 )
+                continue
+
+            if nearest_neighbors_only and j != i + 1:
                 continue
 
             out_name = (
