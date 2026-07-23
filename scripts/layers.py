@@ -93,6 +93,7 @@ def assemble_data(
     flight_ids: List[str],
     include_layers: Optional[List[str]] = None, # <-- New parameter
     fp_coh: str = '../data/coherence/',
+    coh_pol = None,
     fp_inc: str = '../data/inc_angle/',
     fp_snowclimate: str = '../data/NSIDC-0768/',
     crs: str = 'EPSG:4326',
@@ -161,6 +162,7 @@ def assemble_data(
             crs=crs,
             tile_ref_grid=tile_ref,
             fp=fp_coh,
+            pol=coh_pol,
         )
         logger.info("Tile: loaded coherence for flights %s in %.3f seconds.", flight_ids, time.time() - s)
         ds_list.append(coh)
@@ -579,7 +581,7 @@ def get_uavsar_coherence(
     crs: str,
     tile_ref_grid: Union[xr.DataArray, xr.Dataset],
     fp: str = '../data/coherence/',
-    pol: str = 'VV',
+    pol: Union[str, List[str]] = 'VV',
     win: str = '7x10',
 ) -> xr.Dataset:
     """
@@ -624,6 +626,7 @@ def get_uavsar_coherence(
     """
 
     fp = Path(fp)
+    pols = [pol] if isinstance(pol, str) else list(pol)
     flight_arrays = []
 
     for fid in flight_ids:
@@ -634,76 +637,85 @@ def get_uavsar_coherence(
         if not flight_dir.exists():
             raise FileNotFoundError(f"Flight directory not found: {flight_dir}")
 
-        for start_date, end_date in date_pairs:
-            # Format dates to match standard UAVSAR YYMMDD naming convention.
-            date_str1 = start_date.strftime('%y%m%d')
-            date_str2 = end_date.strftime('%y%m%d')
+        pol_arrays = []
+        for p in pols:
+            pair_arrays = []
 
-            # Create a pair coordinate name (e.g. '210210_210224').
-            pair_name = f"{date_str1}_{date_str2}"
+            for start_date, end_date in date_pairs:
+                # Format dates to match standard UAVSAR YYMMDD naming convention.
+                date_str1 = start_date.strftime('%y%m%d')
+                date_str2 = end_date.strftime('%y%m%d')
 
-            search_pattern = f"*{fid}*{date_str1}*{date_str2}*{pol}_s1_w{win}*int_coh*" # TODO - pass in all other parameters needed to uniquely identify the coherence file.
-            found_files = list(flight_dir.glob(search_pattern))
+                # Create a pair coordinate name (e.g. '210210_210224').
+                pair_name = f"{date_str1}_{date_str2}"
 
-            if not found_files:
-                logger.warning(f"No coherence file found for {fid} on {date_str1}_{date_str2}. Padding with NaNs.")
-                dummy_da = xr.full_like(tile_ref_grid, fill_value=np.nan)
-                # Wrap it in a Dataset container with the correct variable name
-                dummy_ds = dummy_da.to_dataset(name='coherence')
-                pair_arrays.append(dummy_ds)
-                continue # Move on to the next date pair
+                search_pattern = f"*{fid}*{date_str1}*{date_str2}*{p}_s1_w{win}*int_coh*"
+                found_files = list(flight_dir.glob(search_pattern))
 
-            # if not found_files:
-            #     raise FileNotFoundError(
-            #         f"Could not find coherence file for flight {fid} and "
-            #         f"dates {pair_name} in {flight_dir}"
-            #     )
-
-            if len(found_files) > 1:
-                logger.warning(
-                    "Multiple coherence files found for flight %s and dates %s; "
-                    "using %s",
-                    fid, pair_name, found_files[0],
-                )
-
-            file_path = found_files[0]
-            logger.debug("Found coherence file: %s", file_path)
-
-            # Load raster lazily, write CRS, and rename the data variable.
-            da = xr.open_dataset(file_path, chunks={})
-            da.rio.write_crs(crs, inplace=True)
-            da = da.rename({list(da.data_vars.keys())[0]: 'coherence'})
-
-            # Pre-clip to the tile bounding box in the raster's native CRS
-            # before calling reproject_match to avoid reading the full raster.
-            # Guard: skip pre-clipping when tile_aoi is None (e.g. testing
-            # without a spatial filter) or when the native CRS cannot be
-            # resolved (e.g. mocked in tests).
-            if tile_aoi is not None:
-                try:
-                    # Use the fast rasterio/VRT path for read + reproject.
-                    ds_matched = read_and_reproject_rasterio(
-                        filepath=str(file_path),
-                        ref_da=tile_ref_grid,
-                        var_name='coherence',
-                        resampling=Resampling.bilinear,
-                    )
-                    pair_arrays.append(ds_matched)
-                except Exception as exc:
-                    logger.warning("Failed to process %s: %s", file_path, exc)
+                if not found_files:
+                    logger.warning(f"No coherence file found for {fid} on {date_str1}_{date_str2}. Padding with NaNs.")
                     dummy_da = xr.full_like(tile_ref_grid, fill_value=np.nan)
-                    pair_arrays.append(dummy_da.to_dataset(name='coherence'))
+                    # Wrap it in a Dataset container with the correct variable name
+                    dummy_ds = dummy_da.to_dataset(name='coherence')
+                    pair_arrays.append(dummy_ds)
+                    continue # Move on to the next date pair
+
+                # if not found_files:
+                #     raise FileNotFoundError(
+                #         f"Could not find coherence file for flight {fid} and "
+                #         f"dates {pair_name} in {flight_dir}"
+                #     )
+
+                if len(found_files) > 1:
+                    logger.warning(
+                        "Multiple coherence files found for flight %s and dates %s; "
+                        "using %s",
+                        fid, pair_name, found_files[0],
+                    )
+
+                file_path = found_files[0]
+                logger.debug("Found coherence file: %s", file_path)
+
+                # Load raster lazily, write CRS, and rename the data variable.
+                da = xr.open_dataset(file_path, chunks={})
+                da.rio.write_crs(crs, inplace=True)
+                da = da.rename({list(da.data_vars.keys())[0]: 'coherence'})
+
+                # Pre-clip to the tile bounding box in the raster's native CRS
+                # before calling reproject_match to avoid reading the full raster.
+                # Guard: skip pre-clipping when tile_aoi is None (e.g. testing
+                # without a spatial filter) or when the native CRS cannot be
+                # resolved (e.g. mocked in tests).
+                if tile_aoi is not None:
+                    try:
+                        # Use the fast rasterio/VRT path for read + reproject.
+                        ds_matched = read_and_reproject_rasterio(
+                            filepath=str(file_path),
+                            ref_da=tile_ref_grid,
+                            var_name='coherence',
+                            resampling=Resampling.bilinear,
+                        )
+                        pair_arrays.append(ds_matched)
+                    except Exception as exc:
+                        logger.warning("Failed to process %s: %s", file_path, exc)
+                        dummy_da = xr.full_like(tile_ref_grid, fill_value=np.nan)
+                        pair_arrays.append(dummy_da.to_dataset(name='coherence'))
 
         # Concatenate all date pairs for this flight.
-        pair_coord = xr.DataArray(
-            [f"{s.strftime('%y%m%d')}_{e.strftime('%y%m%d')}" for s, e in date_pairs],
-            dims=['pair'],
-            name='pair',
-        )
-        flight_da = xr.concat(pair_arrays, dim=pair_coord, coords="minimal", compat="override")
+            pair_coord = xr.DataArray(
+                [f"{s.strftime('%y%m%d')}_{e.strftime('%y%m%d')}" for s, e in date_pairs],
+                dims=['pair'],
+                name='pair',
+            )
+            pol_da = xr.concat(pair_arrays, dim=pair_coord, coords="minimal", compat="override")
+            pol_arrays.append(pol_da)
+
+        # Concatenate all polarizations for this flight.
+        pol_coord = xr.DataArray(pols, dims=['pol'], name='pol')
+        flight_da = xr.concat(pol_arrays, dim=pol_coord)
         flight_arrays.append(flight_da)
 
-    # Concatenate all flights into the final 4-D array.
+    # Concatenate all flights into the final 5-D array.
     flight_coord = xr.DataArray(flight_ids, dims=['flight_id'], name='flight_id')
     coherence_da = xr.concat(flight_arrays, dim=flight_coord)
     logger.debug(
@@ -1174,7 +1186,7 @@ def get_snow_metrics(
 
     if 'swe_accum' in metrics:
         # Mean of only the positive daily SWE changes (new snow mass).
-        out['swe_accum'] = swe_diff.where(swe_diff > 0, other=0)#.mean(dim='time') 
+        out['swe_accum'] = swe_diff.where(swe_diff > 0, other=0).sum(dim='time') 
 
     if 'big_accum' in metrics:
         # Value of 1 if there was any positive daily SWE change > 1 m (heavy snowfall event), else 0.
