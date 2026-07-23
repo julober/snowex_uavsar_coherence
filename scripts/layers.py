@@ -243,27 +243,27 @@ def assemble_data(
         f"{d1.strftime('%y%m%d')}_{d2.strftime('%y%m%d')}" for d1, d2 in date_pairs
     ])
 
-    standardized_ds_list = []
-    for obj in ds_list:
-        if 'pair' in obj.dims:
-            # Cast elements to native Python strings to rule out Numpy type/byte-order issues
-            clean_str_coords = [str(p) for p in obj.pair.values]
-            obj = obj.assign_coords(pair=clean_str_coords)
-            # Reindex reshuffles the labels and forces conformance to the exact order of master_str_labels
-            obj = obj.reindex(pair=master_str_labels)
-        standardized_ds_list.append(obj)
+    # standardized_ds_list = []
+    # for obj in ds_list:
+    #     if 'pair' in obj.dims:
+    #         # Cast elements to native Python strings to rule out Numpy type/byte-order issues
+    #         clean_str_coords = [str(p) for p in obj.pair.values]
+    #         obj = obj.assign_coords(pair=clean_str_coords)
+    #         # Reindex reshuffles the labels and forces conformance to the exact order of master_str_labels
+    #         obj = obj.reindex(pair=master_str_labels)
+    #     standardized_ds_list.append(obj)
 
     # 12. Validation and exact merge
-    if not validate_alignment(standardized_ds_list):
+    if not validate_alignment(ds_list):
         raise ValueError("Alignment issues detected across layers.")
     logger.debug("Tile: all layers validated for spatial and temporal alignment")
 
-    ds = xr.merge(standardized_ds_list, join='exact', compat='minimal')
-    logger.info("Tile: merged %d layers into a single dataset", len(standardized_ds_list))
+    ds = xr.merge(ds_list, join='exact', compat='minimal')
+    logger.info("Tile: merged %d layers into a single dataset", len(ds_list))
 
     # 13. Lazy OOM masking (safe check in case 'coherence' layer wasn't requested)
     if 'coherence' in ds.data_vars:
-        nan_mask = ds['coherence'].isnull().all(dim=('flight_id', 'pair'))
+        nan_mask = ds['coherence'].isnull().all(dim=('flight_id', 'pair', 'pol'))
         for var in ds.data_vars:
             if 'x' in ds[var].dims and 'y' in ds[var].dims:
                 ds[var] = ds[var].where(~nan_mask, drop=False)
@@ -583,6 +583,7 @@ def get_uavsar_coherence(
     fp: str = '../data/coherence/',
     pol: Union[str, List[str]] = 'VV',
     win: str = '7x10',
+    verbose: bool = False, 
 ) -> xr.Dataset:
     """
     Load UAVSAR coherence files and assemble a 4-D cube ``(flight_id, pair, y, x)``.
@@ -653,7 +654,8 @@ def get_uavsar_coherence(
                 found_files = list(flight_dir.glob(search_pattern))
 
                 if not found_files:
-                    logger.warning(f"No coherence file found for {fid} on {date_str1}_{date_str2}. Padding with NaNs.")
+                    if verbose: 
+                        logger.warning(f"No coherence file found for {fid} on {date_str1}_{date_str2}. Padding with NaNs.")
                     dummy_da = xr.full_like(tile_ref_grid, fill_value=np.nan)
                     # Wrap it in a Dataset container with the correct variable name
                     dummy_ds = dummy_da.to_dataset(name='coherence')
@@ -666,7 +668,7 @@ def get_uavsar_coherence(
                 #         f"dates {pair_name} in {flight_dir}"
                 #     )
 
-                if len(found_files) > 1:
+                if len(found_files) > 1 and verbose:
                     logger.warning(
                         "Multiple coherence files found for flight %s and dates %s; "
                         "using %s",
