@@ -580,6 +580,7 @@ def get_uavsar_coherence(
     tile_ref_grid: Union[xr.DataArray, xr.Dataset],
     fp: str = '../data/coherence/',
     pol: str = 'VV',
+    win: str = '7x10',
 ) -> xr.Dataset:
     """
     Load UAVSAR coherence files and assemble a 4-D cube ``(flight_id, pair, y, x)``.
@@ -641,7 +642,7 @@ def get_uavsar_coherence(
             # Create a pair coordinate name (e.g. '210210_210224').
             pair_name = f"{date_str1}_{date_str2}"
 
-            search_pattern = f"*{fid}*{date_str1}*{date_str2}*{pol}_s1*int_coh*" # TODO - pass in all other parameters needed to uniquely identify the coherence file.
+            search_pattern = f"*{fid}*{date_str1}*{date_str2}*{pol}_s1_w{win}*int_coh*" # TODO - pass in all other parameters needed to uniquely identify the coherence file.
             found_files = list(flight_dir.glob(search_pattern))
 
             if not found_files:
