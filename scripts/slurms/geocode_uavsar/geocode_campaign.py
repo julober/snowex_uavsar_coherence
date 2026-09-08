@@ -65,7 +65,10 @@ def main():
 
         # 2. Find all SLC segments in this folder
         slcs = list(flight_dir.glob("*.slc"))
-        
+        logging.info(f"Found {len(slcs)} in flight {flight_num}")
+        logging.info("\n".join(str(s) for s in slcs)) 
+
+
         for slc_fp in slcs:
             base_name = slc_fp.name
             parts = base_name.replace('.slc', '').split('_')
@@ -177,7 +180,8 @@ def main():
             # STEP 2: GEOCODE THE LKV (LOOK VECTOR)
             # ==========================================
             if lkv_fp.exists():
-                expected_lkv = out_dir / f"{base_name}.lkv.x.tif"
+                expected_lkv = out_dir / f"{lkv_name}.x.tif"
+                # expected_lkv = out_dir / f"{lkv_name}.x.tif"
                 if expected_lkv.exists():
                     logging.info(f"  --> Skipping LKV {lkv_name}: {expected_lkv.name} already exists.")
                 else:
