@@ -51,6 +51,18 @@ echo "Output Dir:     ${OUTPUT_DIRECTORY}"
 #    - crosspol            (HV vs. VH cross-polarization pairs, same flight/date/segment)
 MODE="crosspol"
 
+# 5a. Optional: path to a text file listing specific .tif files to process
+#     (one absolute path per line; blank lines and # comments are ignored).
+#     When set, --input_dir is not passed and the SLURM array flight-dir
+#     selection above is bypassed — set --array=1 in the SBATCH header.
+#     Leave empty ("") to use directory-based discovery (default behaviour).
+FILE_LIST=""
+
+# 5b. Which temporal pairs to compute in interferometric mode.
+#     "nearest_neighbors" – consecutive pairs only (default, faster)
+#     "all"              – every unique pair within each group
+PAIRS="nearest_neighbors"
+
 # 6. Set the rectangular window size for the coherence averaging filter (row col)
 WINDOW_SIZE=(12 12)
 
@@ -68,12 +80,20 @@ if [ -n "${POLARIZATION}" ]; then
     POL_FLAG="--polarization ${POLARIZATION}"
 fi
 
-# 9. Run the script for this specific flight directory
+# 9. Build the input flag: use file list if provided, otherwise the flight directory
+if [ -n "${FILE_LIST}" ]; then
+    INPUT_FLAG="--file_list ${FILE_LIST}"
+else
+    INPUT_FLAG="--input_dir ${FLIGHT_DIR}"
+fi
+
+# 10. Run the script
 /bsuhome/julialober/miniforge3/envs/coherence_v2/bin/python calc_coherence/calc_coherence.py \
-    --input_dir   "${FLIGHT_DIR}" \
+    ${INPUT_FLAG} \
     --out_dir     "${OUTPUT_DIRECTORY}" \
     --mode        "${MODE}" \
     --window_size "${WINDOW_SIZE[@]}" \
+    --pairs       "${PAIRS}" \
     ${POL_FLAG}
 
 echo "Coherence calculation complete for ${FLIGHT_DIR}!"
