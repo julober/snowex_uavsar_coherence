@@ -19,6 +19,7 @@ dependencies:
   - pyproj
   - zarr
   - numcodecs
+  - gdal
   
   # Visualization
   - matplotlib
@@ -38,6 +39,7 @@ dependencies:
   - scikit-learn
   - tifffile
   - xarray-spatial
+  - skgstat
   
   # Testing
   - pytest
