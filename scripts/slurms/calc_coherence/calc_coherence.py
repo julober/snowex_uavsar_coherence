@@ -86,6 +86,7 @@ def run_interferometric(
     out_dir: Path,
     window_size: tuple[int, int],
     polarization: str | None = None,
+    all_pairs: bool = False,
 ) -> None:
     """
     Calculate nearest-neighbor temporal coherence.
@@ -131,7 +132,6 @@ def run_interferometric(
         group_out_dir = Path(out_dir) / site / flight
         group_out_dir.mkdir(parents=True, exist_ok=True)
 
-        nearest_neighbors_only = True
         for (i, f1), (j, f2) in itertools.combinations(enumerate(members), 2):
             date1 = f1["date"]
             date2 = f2["date"]
@@ -144,7 +144,7 @@ def run_interferometric(
                 )
                 continue
 
-            if nearest_neighbors_only and j != i + 1:
+            if not all_pairs and j != i + 1:
                 continue
 
             out_name = (
@@ -248,8 +248,29 @@ def main() -> None:
     parser.add_argument(
         "--input_dir",
         type=str,
-        required=True,
-        help="Base directory containing the geocoded .tif files.",
+        default=None,
+        help="Base directory containing the geocoded .tif files (mutually exclusive with --file_list).",
+    )
+    parser.add_argument(
+        "--file_list",
+        type=str,
+        default=None,
+        help=(
+            "Path to a text file listing the .tif files to process, one absolute path per line. "
+            "Blank lines and lines starting with '#' are ignored. "
+            "Mutually exclusive with --input_dir."
+        ),
+    )
+    parser.add_argument(
+        "--pairs",
+        type=str,
+        choices=["nearest_neighbors", "all"],
+        default="nearest_neighbors",
+        help=(
+            "Which temporal pairs to compute in interferometric mode: "
+            "'nearest_neighbors' (default) computes only consecutive pairs; "
+            "'all' computes every unique pair within each group."
+        ),
     )
     parser.add_argument(
         "--out_dir",
@@ -295,16 +316,34 @@ def main() -> None:
     )
     logger = logging.getLogger(__name__)
 
-    input_dir = Path(args.input_dir)
     out_dir = Path(args.out_dir)
 
-    if not input_dir.exists():
-        logger.error("Input directory does not exist: %s", input_dir)
+    # --- Validate and resolve input source ---
+    if args.input_dir is None and args.file_list is None:
+        logger.error("One of --input_dir or --file_list is required.")
+        sys.exit(1)
+    if args.input_dir is not None and args.file_list is not None:
+        logger.error("--input_dir and --file_list are mutually exclusive.")
         sys.exit(1)
 
-    # Discover all TIF files recursively
-    all_tifs = list(input_dir.rglob("*.tif"))
-    logger.info("Found %d .tif files in %s", len(all_tifs), input_dir)
+    if args.file_list is not None:
+        file_list_path = Path(args.file_list)
+        if not file_list_path.exists():
+            logger.error("File list does not exist: %s", file_list_path)
+            sys.exit(1)
+        all_tifs = [
+            Path(line.strip())
+            for line in file_list_path.read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        logger.info("Loaded %d paths from file list %s", len(all_tifs), file_list_path)
+    else:
+        input_dir = Path(args.input_dir)
+        if not input_dir.exists():
+            logger.error("Input directory does not exist: %s", input_dir)
+            sys.exit(1)
+        all_tifs = list(input_dir.rglob("*.tif"))
+        logger.info("Found %d .tif files in %s", len(all_tifs), input_dir)
 
     # Parse filenames, skipping those that don't match
     parsed = []
@@ -320,9 +359,10 @@ def main() -> None:
     )
 
     window_size = tuple(args.window_size)
+    all_pairs = args.pairs == "all"
 
     if args.mode == "interferometric":
-        run_interferometric(parsed, out_dir, window_size, polarization=args.polarization)
+        run_interferometric(parsed, out_dir, window_size, polarization=args.polarization, all_pairs=all_pairs)
     else:
         run_crosspol(parsed, out_dir, window_size)
 
