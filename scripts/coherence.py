@@ -1,6 +1,5 @@
 import logging
 import math
-
 import numpy as np
 import rasterio
 from pathlib import Path
@@ -191,6 +190,7 @@ def calculate_coherence(
             blockxsize=512,
             blockysize=512,
             compress="deflate",
+            bigtiff="YES",
         )
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
