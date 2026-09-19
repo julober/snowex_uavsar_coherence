@@ -5,6 +5,7 @@ import pandas as pd
 
 def plot_tifs_grid(tif_inputs, 
                    is_file=True,
+                   ncols=3,
                    titles=None) :
     """
     Plots a list of .tif files or arrays in a grid (3 columns), with a shared colorbar.
@@ -25,7 +26,7 @@ def plot_tifs_grid(tif_inputs,
             titles = [f"Image pair {i+1}" for i in range(len(arrays))]
 
     n_images = len(arrays)
-    n_cols = 3
+    n_cols = ncols
     n_rows = math.ceil(n_images / n_cols)
 
     # Create subplots
