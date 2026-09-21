@@ -262,11 +262,11 @@ def assemble_data(
     logger.info("Tile: merged %d layers into a single dataset", len(ds_list))
 
     # 13. Lazy OOM masking (safe check in case 'coherence' layer wasn't requested)
-    if 'coherence' in ds.data_vars:
-        nan_mask = ds['coherence'].isnull().all(dim=('flight_id', 'pair', 'pol'))
-        for var in ds.data_vars:
-            if 'x' in ds[var].dims and 'y' in ds[var].dims:
-                ds[var] = ds[var].where(~nan_mask, drop=False)
+    # if 'coherence' in ds.data_vars:
+    #     nan_mask = ds['coherence'].isnull().all(dim=('flight_id', 'pair', 'pol'))
+    #     for var in ds.data_vars:
+    #         if 'x' in ds[var].dims and 'y' in ds[var].dims:
+    #             ds[var] = ds[var].where(~nan_mask, drop=False)
 
     return ds
 
