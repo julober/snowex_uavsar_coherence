@@ -1390,7 +1390,7 @@ def get_aorc_layers(
         # Clip spatially on the smaller, already time-sliced dataset.
         ds_slice = ds_slice.rio.clip(g.geometry.values, crs=crs)
 
-        ds_metrics = get_aorc_metrics(ds_slice, metrics=metrics)
+        ds_metrics = get_aorc_metrics(ds_slice, metrics=['mean_wind', 'max_wind'])
         pair_name = start_date.strftime('%y%m%d') + "_" + end_date.strftime('%y%m%d')
         ds_metrics['pair'] = pair_name
         ds_metrics = ds_metrics.set_coords('pair')
