@@ -1,4 +1,5 @@
 import logging
+import re
 from pathlib import Path
 from typing import List, Tuple, Union
 
@@ -7,6 +8,7 @@ import earthaccess
 import geopandas as gpd
 import h5py
 import numpy as np
+import rasterio
 import rioxarray  # noqa: F401  (registers the .rio accessor on xr.DataArray)
 import xarray as xr
 
@@ -217,3 +219,81 @@ def download_nisar(
                 logger.info(f"  wrote {out_path.name} ({clipped.shape[-1]}x{clipped.shape[-2]})")
 
     return granule_names, downloaded_files
+
+
+def parse_dates(fname: Union[str, Path]) -> Tuple[str, str]:
+    """
+    Extract the reference and secondary acquisition dates (``YYYYMMDD``) from
+    a NISAR GUNW scene name, or one of the GeoTIFF filenames written by
+    ``download_nisar`` (which prefixes the layer name with the scene name).
+
+    Parameters
+    ----------
+    fname : str | Path
+        Scene name or filename containing the four GUNW acquisition
+        timestamps (e.g. ``..._20260207T124619_20260207T124654_20260219T124619_20260219T124654_...``).
+
+    Returns
+    -------
+    (reference_date, secondary_date) : tuple of str
+        The reference and secondary acquisition dates as ``YYYYMMDD`` strings.
+    """
+    fname = str(fname)
+    d1 = re.findall(r'_(\d{8})T\d{6}_\d{8}T\d{6}_', fname)[0]
+    d2 = re.findall(r'_\d{8}T\d{6}_\d{8}T\d{6}_(\d{8})T\d{6}_\d{8}T\d{6}_', fname)[0]
+    return d1, d2
+
+
+def build_cube(files: List[Union[str, Path]], band_name: str) -> xr.DataArray:
+    """
+    Stack a list of single-band GeoTIFFs sharing a common grid (e.g. the same
+    layer across multiple date pairs, as returned by ``download_nisar``) into
+    a single 3D ``(pair, y, x)`` DataArray.
+
+    Files sharing the same reference/secondary date pair (as parsed by
+    ``parse_dates``) are deduplicated, keeping only the first (sorted by
+    filename).
+
+    Parameters
+    ----------
+    files : list of str | Path
+        Paths to single-band GeoTIFFs, all on the same grid.
+    band_name : str
+        Name to assign to the returned DataArray.
+
+    Returns
+    -------
+    xarray.DataArray
+        Stacked cube with dims ``('pair', 'y', 'x')``, coordinates ``pair``
+        (date-pair strings ``'YYYYMMDD_YYYYMMDD'``) and pixel-center
+        ``x``/``y`` coordinates. The source CRS is stored in
+        ``da.attrs['crs']``.
+    """
+    arrays, pairs = [], []
+    seen = set()
+
+    for f in sorted(files):
+        d1, d2 = parse_dates(f)
+        pair_id = f"{d1}_{d2}"
+        if pair_id in seen:
+            continue
+        seen.add(pair_id)
+
+        with rasterio.open(f) as src:
+            arrays.append(src.read(1))
+            transform = src.transform
+            crs = src.crs
+            height, width = src.height, src.width
+        pairs.append(pair_id)
+
+    stack = np.stack(arrays)
+    xs = transform.c + (np.arange(width) + 0.5) * transform.a
+    ys = transform.f + (np.arange(height) + 0.5) * transform.e
+
+    da = xr.DataArray(
+        stack, dims=('pair', 'y', 'x'),
+        coords={'pair': pairs, 'y': ys, 'x': xs},
+        name=band_name,
+    )
+    da.attrs['crs'] = str(crs)
+    return da
