@@ -168,7 +168,10 @@ def download_nisar(
     granule_names : list of str
         Scene names of every granule found matching the search criteria.
     downloaded_files : list of Path
-        Paths to every clipped GeoTIFF written to ``output_dir``.
+        Paths to every clipped GeoTIFF for the requested layers, whether
+        freshly written this call or already present in ``output_dir``. Files
+        that already exist are left untouched and skipped rather than
+        re-downloaded, so re-running with the same arguments is cheap.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -201,6 +204,17 @@ def download_nisar(
 
     for granule in results:
         scene_name = granule.properties['sceneName']
+        out_paths = {layer: output_dir / f'{scene_name}_{layer}.tif' for layer in layers}
+
+        for layer, out_path in out_paths.items():
+            if out_path.exists():
+                logger.info(f"  {out_path.name} already exists, skipping")
+                downloaded_files.append(out_path)
+
+        missing_layers = [layer for layer in layers if not out_paths[layer].exists()]
+        if not missing_layers:
+            continue
+
         url = granule.properties['url']
         logger.info(f"Processing granule: {scene_name}")
 
@@ -208,11 +222,11 @@ def download_nisar(
             epsg = _get_epsg(hf, polarization)
             clip_geom = boundary.to_crs(f'EPSG:{epsg}').geometry
 
-            for layer in layers:
+            for layer in missing_layers:
                 da = _read_layer(hf, layer, polarization, epsg)
                 clipped = da.rio.clip(clip_geom, all_touched=True, drop=True)
 
-                out_path = output_dir / f'{scene_name}_{layer}.tif'
+                out_path = out_paths[layer]
                 clipped.rio.to_raster(out_path, bigtiff='YES')
                 downloaded_files.append(out_path)
                 logger.info(f"  wrote {out_path.name} ({clipped.shape[-1]}x{clipped.shape[-2]})")
