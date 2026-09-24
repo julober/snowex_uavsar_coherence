@@ -309,4 +309,4 @@ def build_cube(files: List[Union[str, Path]], band_name: str) -> xr.DataArray:
         name=band_name,
     )
     da.attrs['crs'] = str(crs)
-    return da
+    return da.to_dataset()
