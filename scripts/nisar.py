@@ -119,7 +119,6 @@ def _read_layer(hf: h5py.File, layer: str, polarization: str, epsg: int) -> xr.D
     da = xr.DataArray(data, dims=['y', 'x'], coords={'x': x, 'y': y}, name=layer)
     return da.rio.write_crs(f'EPSG:{epsg}').rio.write_nodata(np.nan)
 
-
 def download_nisar(
     track: int,
     frame: int,
@@ -127,7 +126,7 @@ def download_nisar(
     end_date: str,
     aoi: Union[str, Path, gpd.GeoDataFrame],
     layers: List[str],
-    output_dir: Union[str, Path],
+    output_dir: Union[str, Path] = '.',
     polarization: str = 'HH',
 ) -> Tuple[List[str], List[Path]]:
     """

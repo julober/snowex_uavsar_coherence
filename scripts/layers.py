@@ -262,11 +262,11 @@ def assemble_data(
     logger.info("Tile: merged %d layers into a single dataset", len(ds_list))
 
     # 13. Lazy OOM masking (safe check in case 'coherence' layer wasn't requested)
-    if 'coherence' in ds.data_vars:
-        nan_mask = ds['coherence'].isnull().all(dim=('flight_id', 'pair', 'pol'))
-        for var in ds.data_vars:
-            if 'x' in ds[var].dims and 'y' in ds[var].dims:
-                ds[var] = ds[var].where(~nan_mask, drop=False)
+    # if 'coherence' in ds.data_vars:
+    #     nan_mask = ds['coherence'].isnull().all(dim=('flight_id', 'pair', 'pol'))
+    #     for var in ds.data_vars:
+    #         if 'x' in ds[var].dims and 'y' in ds[var].dims:
+    #             ds[var] = ds[var].where(~nan_mask, drop=False)
 
     return ds
 
@@ -1390,7 +1390,7 @@ def get_aorc_layers(
         # Clip spatially on the smaller, already time-sliced dataset.
         ds_slice = ds_slice.rio.clip(g.geometry.values, crs=crs)
 
-        ds_metrics = get_aorc_metrics(ds_slice, metrics=metrics)
+        ds_metrics = get_aorc_metrics(ds_slice, metrics=['mean_wind', 'max_wind'])
         pair_name = start_date.strftime('%y%m%d') + "_" + end_date.strftime('%y%m%d')
         ds_metrics['pair'] = pair_name
         ds_metrics = ds_metrics.set_coords('pair')
