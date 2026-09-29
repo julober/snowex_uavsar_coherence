@@ -42,14 +42,24 @@ LAYER_REGISTRY: dict = {
         'coords': 'wrapped',
     },
     'incidence_angle': {
-        'path': None,
+        'dataset': 'incidenceAngle',
+        'coords': 'metadata',
+    },
+    'parallel_baseline': {
+        'dataset': 'parallelBaseline',
+        'coords': 'metadata',
+    },
+    'perpendicular_baseline': {
+        'dataset': 'perpendicularBaseline',
         'coords': 'metadata',
     },
 }
 """Maps a friendly layer name to its relative HDF5 path template (``{pol}`` is
 filled in with the requested polarization) and the coordinate group used to
-georeference it. ``incidence_angle`` is special-cased since it lives under
-the metadata radar grid rather than a polarized interferogram group."""
+georeference it. Layers with coords ``'metadata'`` (``incidence_angle``,
+``parallel_baseline``, ``perpendicular_baseline``) live under the metadata
+radar grid rather than a polarized interferogram group; they are identified by
+a ``'dataset'`` name under ``radarGrid`` and keep every height level as a band."""
 
 COORD_PATHS: dict = {
     'unwrapped': ('unwrappedInterferogram/{pol}/xCoordinates', 'unwrappedInterferogram/{pol}/yCoordinates'),
@@ -80,14 +90,17 @@ def _read_coords(hf: h5py.File, coord_group: str, polarization: str) -> Tuple[np
     return x, y
 
 
-def _read_incidence_angle(hf: h5py.File, x: np.ndarray, y: np.ndarray, epsg: int) -> xr.DataArray:
-    """Read the incidence angle at the height level nearest the ellipsoid."""
+def _read_radar_grid_layer(
+    hf: h5py.File, dataset: str, name: str, x: np.ndarray, y: np.ndarray, epsg: int
+) -> xr.DataArray:
+    """Read a radar-grid metadata layer with all height levels as bands."""
     heights = hf[f'{BASE_META}/radarGrid/heightAboveEllipsoid'][:]
-    height_idx = int(np.argmin(np.abs(heights)))
-    data = hf[f'{BASE_META}/radarGrid/incidenceAngle'][height_idx].astype(np.float32)
+    data = hf[f'{BASE_META}/radarGrid/{dataset}'][:].astype(np.float32)
     data[data == 0] = np.nan
 
-    da = xr.DataArray(data, dims=['y', 'x'], coords={'x': x, 'y': y}, name='incidence_angle')
+    da = xr.DataArray(
+        data, dims=['band', 'y', 'x'], coords={'band': heights, 'x': x, 'y': y}, name=name
+    )
     return da.rio.write_crs(f'EPSG:{epsg}').rio.write_nodata(np.nan)
 
 
@@ -101,8 +114,8 @@ def _read_layer(hf: h5py.File, layer: str, polarization: str, epsg: int) -> xr.D
     entry = LAYER_REGISTRY[layer]
     x, y = _read_coords(hf, entry['coords'], polarization)
 
-    if layer == 'incidence_angle':
-        return _read_incidence_angle(hf, x, y, epsg)
+    if entry['coords'] == 'metadata':
+        return _read_radar_grid_layer(hf, entry['dataset'], layer, x, y, epsg)
 
     ds_path = f"{BASE_GRIDS}/{entry['path'].format(pol=polarization)}"
     ds = hf[ds_path]
@@ -157,7 +170,11 @@ def download_nisar(
         Names of the layers to extract for each granule. Valid options are
         the keys of ``LAYER_REGISTRY``: ``'unwrapped_phase'``,
         ``'coherence_unwrapped'``, ``'wrapped_phase'``,
-        ``'coherence_wrapped'``, ``'incidence_angle'``.
+        ``'coherence_wrapped'``, ``'incidence_angle'``,
+        ``'parallel_baseline'``, ``'perpendicular_baseline'``. The last three
+        are radar-grid metadata layers written as multi-band GeoTIFFs with one
+        band per height level above the ellipsoid (band descriptions hold the
+        height in metres).
     output_dir : str | Path
         Directory to write clipped GeoTIFFs into. Created if it doesn't exist.
     polarization : str, default='HH'
@@ -228,6 +245,10 @@ def download_nisar(
 
                 out_path = out_paths[layer]
                 clipped.rio.to_raster(out_path, bigtiff='YES')
+                if 'band' in clipped.dims:
+                    with rasterio.open(out_path, 'r+') as dst:
+                        for i, h in enumerate(clipped['band'].values, start=1):
+                            dst.set_band_description(i, f'height={float(h):g}')
                 downloaded_files.append(out_path)
                 logger.info(f"  wrote {out_path.name} ({clipped.shape[-1]}x{clipped.shape[-2]})")
 
