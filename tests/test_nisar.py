@@ -11,7 +11,10 @@ LAYERS = {
     'incidence_angle': 'incidenceAngle',
     'parallel_baseline': 'parallelBaseline',
     'perpendicular_baseline': 'perpendicularBaseline',
+    'reference_slant_range': 'referenceSlantRange',
+    'secondary_slant_range': 'secondarySlantRange',
 }
+FLOAT64 = {'reference_slant_range', 'secondary_slant_range'}
 
 
 @pytest.fixture
@@ -21,8 +24,9 @@ def hf():
     grp['heightAboveEllipsoid'] = np.array([-500.0, 0.0, 500.0, 1000.0])
     grp['xCoordinates'] = 500000.0 + 100.0 * np.arange(NX)
     grp['yCoordinates'] = 4000000.0 - 100.0 * np.arange(NY)
-    for name in LAYERS.values():
-        grp[name] = np.random.rand(N_H, NY, NX).astype(np.float32) + 1
+    for layer, name in LAYERS.items():
+        dt = np.float64 if layer in FLOAT64 else np.float32
+        grp[name] = np.random.rand(N_H, NY, NX).astype(dt) + 1
     yield f
     f.close()
 
@@ -34,6 +38,7 @@ def test_metadata_layers_keep_all_heights(hf, layer):
     assert da.shape == (N_H, NY, NX)
     assert list(da['band'].values) == [-500.0, 0.0, 500.0, 1000.0]
     assert da.rio.crs.to_epsg() == 32611
+    assert da.dtype == (np.float64 if layer in FLOAT64 else np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -49,11 +54,11 @@ HEIGHTS = [0.0, 500.0, 1000.0]
 PAIR = 'NISAR_L2_PR_GUNW_001_001_A_001_4000_SHNA_A_20260207T124619_20260207T124654_20260219T124619_20260219T124654_X_0_0_layer.tif'
 
 
-def _radar_tif(path, crs='EPSG:32611'):
+def _radar_tif(path, crs='EPSG:32611', dtype='float32'):
     xs = 500000.0 + 1000.0 * np.arange(6)
     ys = 4001000.0 - 1000.0 * np.arange(6)
-    data = np.stack([A * xs[None, :] + B * ys[:, None] + C * h * np.ones((6, 6)) for h in HEIGHTS]).astype('float32')
-    with rasterio.open(path, 'w', driver='GTiff', height=6, width=6, count=3, dtype='float32',
+    data = np.stack([A * xs[None, :] + B * ys[:, None] + C * h * np.ones((6, 6)) for h in HEIGHTS]).astype(dtype)
+    with rasterio.open(path, 'w', driver='GTiff', height=6, width=6, count=3, dtype=dtype,
                        crs=crs, transform=from_origin(xs[0] - 500, ys[0] + 500, 1000, 1000)) as dst:
         dst.write(data)
         for i, h in enumerate(HEIGHTS, 1):
@@ -113,3 +118,9 @@ def test_missing_height_descriptions(tmp_path):
         dst.set_band_description(1, 'nope')
     with pytest.raises(ValueError, match='height='):
         nisar.interpolate_radar_grid_to_dem(_dem(np.zeros((3, 4))), [f])
+
+
+def test_float64_input_gives_float64_output(tmp_path):
+    f = tmp_path / PAIR
+    _radar_tif(f, dtype='float64')
+    assert nisar.interpolate_radar_grid_to_dem(_dem(np.zeros((3, 4))), [f]).dtype == np.float64

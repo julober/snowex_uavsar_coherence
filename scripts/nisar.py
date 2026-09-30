@@ -55,11 +55,20 @@ LAYER_REGISTRY: dict = {
         'dataset': 'perpendicularBaseline',
         'coords': 'metadata',
     },
+    'reference_slant_range': {
+        'dataset': 'referenceSlantRange',
+        'coords': 'metadata',
+    },
+    'secondary_slant_range': {
+        'dataset': 'secondarySlantRange',
+        'coords': 'metadata',
+    },
 }
 """Maps a friendly layer name to its relative HDF5 path template (``{pol}`` is
 filled in with the requested polarization) and the coordinate group used to
 georeference it. Layers with coords ``'metadata'`` (``incidence_angle``,
-``parallel_baseline``, ``perpendicular_baseline``) live under the metadata
+``parallel_baseline``, ``perpendicular_baseline``, ``reference_slant_range``,
+``secondary_slant_range``) live under the metadata
 radar grid rather than a polarized interferogram group; they are identified by
 a ``'dataset'`` name under ``radarGrid`` and keep every height level as a band."""
 
@@ -97,7 +106,9 @@ def _read_radar_grid_layer(
 ) -> xr.DataArray:
     """Read a radar-grid metadata layer with all height levels as bands."""
     heights = hf[f'{BASE_META}/radarGrid/heightAboveEllipsoid'][:]
-    data = hf[f'{BASE_META}/radarGrid/{dataset}'][:].astype(np.float32)
+    data = hf[f'{BASE_META}/radarGrid/{dataset}'][:]
+    if data.dtype != np.float64:  # keep float64 (slant ranges need the precision)
+        data = data.astype(np.float32)
     data[data == 0] = np.nan
 
     da = xr.DataArray(
@@ -173,7 +184,8 @@ def download_nisar(
         the keys of ``LAYER_REGISTRY``: ``'unwrapped_phase'``,
         ``'coherence_unwrapped'``, ``'wrapped_phase'``,
         ``'coherence_wrapped'``, ``'incidence_angle'``,
-        ``'parallel_baseline'``, ``'perpendicular_baseline'``. The last three
+        ``'parallel_baseline'``, ``'perpendicular_baseline'``,
+        ``'reference_slant_range'``, ``'secondary_slant_range'``. The last five
         are radar-grid metadata layers written as multi-band GeoTIFFs with one
         band per height level above the ellipsoid (band descriptions hold the
         height in metres).
@@ -351,6 +363,7 @@ def _read_heights(path: Union[str, Path]) -> np.ndarray:
 def _interp_radar_grid(
     values: np.ndarray, heights: np.ndarray, ys: np.ndarray, xs: np.ndarray, x_pts: np.ndarray,
     y_pts: np.ndarray, z_pts: np.ndarray, chunk_pixels: int = 2_000_000,
+    dtype=np.float32,
 ) -> np.ndarray:
     """Trilinear interpolation of ``values`` (height, y, x) at 2D point arrays.
 
@@ -360,7 +373,7 @@ def _interp_radar_grid(
     interp = RegularGridInterpolator(
         (ys, xs), np.moveaxis(values, 0, -1), bounds_error=False, fill_value=np.nan
     )
-    out = np.full(z_pts.shape, np.nan, dtype=np.float32)
+    out = np.full(z_pts.shape, np.nan, dtype=dtype)
     rows_per_chunk = max(1, chunk_pixels // z_pts.shape[1])
 
     for r0 in range(0, z_pts.shape[0], rows_per_chunk):
@@ -448,7 +461,7 @@ def interpolate_radar_grid_to_dem(
         src = src.isel(band=order).sortby('y')
         arrays.append(_interp_radar_grid(
             src.values.astype(np.float64), heights[order], src['y'].values, src['x'].values,
-            x_pts, y_pts, z,
+            x_pts, y_pts, z, dtype=src.dtype,
         ))
         try:
             pairs.append('_'.join(parse_dates(f)))
