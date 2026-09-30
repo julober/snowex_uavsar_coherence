@@ -1,7 +1,7 @@
 import logging
 import re
 from pathlib import Path
-from typing import List, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import asf_search as asf
 import earthaccess
@@ -145,6 +145,47 @@ def _read_layer(hf: h5py.File, layer: str, polarization: str, epsg: int) -> xr.D
     da = xr.DataArray(data, dims=['y', 'x'], coords={'x': x, 'y': y}, name=layer)
     return da.rio.write_crs(f'EPSG:{epsg}').rio.write_nodata(np.nan)
 
+_CRID_RE = re.compile(r'^[A-Z]\d{5}$')
+
+
+def _scene_crid(scene_name: str) -> Optional[str]:
+    """Return the processing code (CRID, e.g. ``'P05023'``) token of a scene name, if any."""
+    for token in scene_name.split('_'):
+        if _CRID_RE.match(token):
+            return token
+    return None
+
+
+def _filter_by_crid(results: list, crid: Optional[str]) -> list:
+    """Keep only search results whose scene name carries the given CRID token.
+
+    ``asf.search`` has no CRID/processing-version keyword for NISAR, so this is
+    applied client-side. ``crid=None`` returns ``results`` unchanged.
+    """
+    if crid is None:
+        return list(results)
+    return [r for r in results if crid in r.properties['sceneName'].split('_')]
+
+
+def _warn_mixed_crids(results: list) -> None:
+    """Warn when several processing versions exist for the same date pair."""
+    by_pair: dict = {}
+    for r in results:
+        name = r.properties['sceneName']
+        try:
+            pair = parse_dates(name)
+        except IndexError:
+            continue
+        by_pair.setdefault(pair, set()).add(_scene_crid(name))
+    mixed = {pair: sorted(c for c in crids if c) for pair, crids in by_pair.items() if len(crids) > 1}
+    if mixed:
+        all_crids = sorted({c for crids in mixed.values() for c in crids})
+        logger.warning(
+            f"{len(mixed)} date pair(s) have multiple processing versions {all_crids}; "
+            f"pass crid=... to select one."
+        )
+
+
 def download_nisar(
     track: int,
     frame: int,
@@ -154,6 +195,7 @@ def download_nisar(
     layers: List[str],
     output_dir: Union[str, Path] = '.',
     polarization: str = 'HH',
+    crid: Optional[str] = None,
 ) -> Tuple[List[str], List[Path]]:
     """
     Search for NISAR GUNW granules over a track/frame and date range, clip a
@@ -193,6 +235,12 @@ def download_nisar(
         Directory to write clipped GeoTIFFs into. Created if it doesn't exist.
     polarization : str, default='HH'
         Polarization channel to read the interferogram layers from.
+    crid : str, optional
+        Processing code (composite release ID) to keep, e.g. ``'P05023'``.
+        ``asf.search`` cannot filter on this, so granules whose scene name
+        lacks this token are dropped after the search. If ``None`` (default),
+        all processing versions are kept (a warning is logged if a date pair
+        exists in more than one version).
 
     Returns
     -------
@@ -218,6 +266,13 @@ def download_nisar(
         start=start_date,
         end=end_date,
     )
+
+    if crid is None:
+        _warn_mixed_crids(results)
+    else:
+        n_found = len(results)
+        results = _filter_by_crid(results, crid)
+        logger.info(f"Kept {len(results)} of {n_found} granule(s) with processing code {crid}.")
 
     granule_names = [r.properties['sceneName'] for r in results]
     logger.info(f"Found {len(granule_names)} matching granule(s).")

@@ -124,3 +124,33 @@ def test_float64_input_gives_float64_output(tmp_path):
     f = tmp_path / PAIR
     _radar_tif(f, dtype='float64')
     assert nisar.interpolate_radar_grid_to_dem(_dem(np.zeros((3, 4))), [f]).dtype == np.float64
+
+
+# ---------------------------------------------------------------------------
+# CRID filtering
+# ---------------------------------------------------------------------------
+
+class _Result:
+    def __init__(self, name):
+        self.properties = {'sceneName': name}
+
+
+_BASE = 'NISAR_L2_PR_GUNW_001_001_A_001_4000_SHNA_A_20260207T124619_20260207T124654_20260219T124619_20260219T124654_{}_N_F_J_001'
+RESULTS = [_Result(_BASE.format('X05010')), _Result(_BASE.format('P05023'))]
+
+
+def test_filter_by_crid():
+    kept = nisar._filter_by_crid(RESULTS, 'P05023')
+    assert [r.properties['sceneName'] for r in kept] == [RESULTS[1].properties['sceneName']]
+    assert nisar._filter_by_crid(RESULTS, 'P0502') == []  # token match, not substring
+    assert nisar._filter_by_crid(RESULTS, None) == RESULTS
+
+
+def test_warn_mixed_crids(caplog):
+    with caplog.at_level('WARNING'):
+        nisar._warn_mixed_crids(RESULTS)
+    assert 'P05023' in caplog.text and 'X05010' in caplog.text
+    caplog.clear()
+    with caplog.at_level('WARNING'):
+        nisar._warn_mixed_crids(RESULTS[:1])
+    assert caplog.text == ''
