@@ -1,4 +1,4 @@
-name: coherence_v2
+name: coherence
 channels:
   - conda-forge
   - nodefaults

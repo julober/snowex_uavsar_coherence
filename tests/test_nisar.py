@@ -34,3 +34,82 @@ def test_metadata_layers_keep_all_heights(hf, layer):
     assert da.shape == (N_H, NY, NX)
     assert list(da['band'].values) == [-500.0, 0.0, 500.0, 1000.0]
     assert da.rio.crs.to_epsg() == 32611
+
+
+# ---------------------------------------------------------------------------
+# interpolate_radar_grid_to_dem
+# ---------------------------------------------------------------------------
+
+import rasterio  # noqa: E402
+import xarray as xr  # noqa: E402
+from rasterio.transform import from_origin  # noqa: E402
+
+A, B, C = 0.001, -0.002, 0.01
+HEIGHTS = [0.0, 500.0, 1000.0]
+PAIR = 'NISAR_L2_PR_GUNW_001_001_A_001_4000_SHNA_A_20260207T124619_20260207T124654_20260219T124619_20260219T124654_X_0_0_layer.tif'
+
+
+def _radar_tif(path, crs='EPSG:32611'):
+    xs = 500000.0 + 1000.0 * np.arange(6)
+    ys = 4001000.0 - 1000.0 * np.arange(6)
+    data = np.stack([A * xs[None, :] + B * ys[:, None] + C * h * np.ones((6, 6)) for h in HEIGHTS]).astype('float32')
+    with rasterio.open(path, 'w', driver='GTiff', height=6, width=6, count=3, dtype='float32',
+                       crs=crs, transform=from_origin(xs[0] - 500, ys[0] + 500, 1000, 1000)) as dst:
+        dst.write(data)
+        for i, h in enumerate(HEIGHTS, 1):
+            dst.set_band_description(i, f'height={h:g}')
+
+
+def _dem(z):
+    xs = 501500.0 + 500.0 * np.arange(4)
+    ys = 4000500.0 - 500.0 * np.arange(3)
+    da = xr.DataArray(z, dims=('y', 'x'), coords={'y': ys, 'x': xs})
+    return da.rio.write_crs('EPSG:32611')
+
+
+def test_interpolation_matches_linear_field(tmp_path):
+    f = tmp_path / PAIR
+    _radar_tif(f)
+    z = np.array([[0, 250, 700, 1000], [100, 300, 900, 50], [0, 0, 0, 0]], dtype=float)
+    dem = _dem(z)
+    out = nisar.interpolate_radar_grid_to_dem(dem, [f])
+    X, Y = np.meshgrid(dem.x.values, dem.y.values)
+    assert out.dims == ('y', 'x')
+    np.testing.assert_allclose(out.values, A * X + B * Y + C * z, rtol=1e-5)
+
+
+def test_clamping_nan_and_pairs(tmp_path):
+    f1, f2 = tmp_path / PAIR, tmp_path / PAIR.replace('20260219', '20260303')
+    _radar_tif(f1)
+    _radar_tif(f2)
+    z = np.full((3, 4), 5000.0)
+    z[0, 0] = np.nan
+    out = nisar.interpolate_radar_grid_to_dem(_dem(z), [f1, f2])
+    assert out.dims == ('pair', 'y', 'x')
+    assert list(out.pair.values) == ['20260207_20260219', '20260207_20260303']
+    assert np.isnan(out.values[:, 0, 0]).all()
+    X, Y = np.meshgrid(out.x.values, out.y.values)
+    np.testing.assert_allclose(out.values[0, 1, 1], A * X[1, 1] + B * Y[1, 1] + C * 1000, rtol=1e-5)
+
+
+def test_outside_extent_is_nan_and_crs_reprojected(tmp_path):
+    f = tmp_path / PAIR
+    _radar_tif(f)
+    dem = _dem(np.zeros((3, 4)))
+    far = dem.assign_coords(x=dem.x + 100000.0)
+    assert np.isnan(nisar.interpolate_radar_grid_to_dem(far, [f]).values).all()
+
+    from pyproj import Transformer
+    lon, lat = Transformer.from_crs('EPSG:32611', 'EPSG:4326', always_xy=True).transform(502000.0, 4000000.0)
+    dem_ll = xr.DataArray(np.zeros((1, 1)), dims=('y', 'x'), coords={'y': [lat], 'x': [lon]}).rio.write_crs('EPSG:4326')
+    out = nisar.interpolate_radar_grid_to_dem(dem_ll, [f])
+    np.testing.assert_allclose(out.values[0, 0], A * 502000.0 + B * 4000000.0, rtol=1e-4)
+
+
+def test_missing_height_descriptions(tmp_path):
+    f = tmp_path / PAIR
+    _radar_tif(f)
+    with rasterio.open(f, 'r+') as dst:
+        dst.set_band_description(1, 'nope')
+    with pytest.raises(ValueError, match='height='):
+        nisar.interpolate_radar_grid_to_dem(_dem(np.zeros((3, 4))), [f])

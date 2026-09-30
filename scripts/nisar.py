@@ -11,6 +11,8 @@ import numpy as np
 import rasterio
 import rioxarray  # noqa: F401  (registers the .rio accessor on xr.DataArray)
 import xarray as xr
+from pyproj import Transformer
+from scipy.interpolate import RegularGridInterpolator
 
 logger = logging.getLogger(__name__)
 
@@ -331,3 +333,134 @@ def build_cube(files: List[Union[str, Path]], band_name: str) -> xr.DataArray:
     )
     da.attrs['crs'] = str(crs)
     return da.to_dataset()
+
+
+def _read_heights(path: Union[str, Path]) -> np.ndarray:
+    """Parse the per-band ``height=<m>`` descriptions written by ``download_nisar``."""
+    with rasterio.open(path) as src:
+        descs = src.descriptions
+    try:
+        return np.array([float(d.split('=', 1)[1]) for d in descs])
+    except (AttributeError, IndexError, ValueError):
+        raise ValueError(
+            f"{path}: band descriptions must look like 'height=<metres>' "
+            f"(as written by download_nisar); got {descs}"
+        )
+
+
+def _interp_radar_grid(
+    values: np.ndarray, heights: np.ndarray, ys: np.ndarray, xs: np.ndarray, x_pts: np.ndarray,
+    y_pts: np.ndarray, z_pts: np.ndarray, chunk_pixels: int = 2_000_000,
+) -> np.ndarray:
+    """Trilinear interpolation of ``values`` (height, y, x) at 2D point arrays.
+
+    ``ys``/``xs`` must be ascending; ``heights`` ascending. Points outside the
+    horizontal extent give NaN; elevations outside the height range are clamped.
+    """
+    interp = RegularGridInterpolator(
+        (ys, xs), np.moveaxis(values, 0, -1), bounds_error=False, fill_value=np.nan
+    )
+    out = np.full(z_pts.shape, np.nan, dtype=np.float32)
+    rows_per_chunk = max(1, chunk_pixels // z_pts.shape[1])
+
+    for r0 in range(0, z_pts.shape[0], rows_per_chunk):
+        sl = slice(r0, r0 + rows_per_chunk)
+        z = z_pts[sl]
+        pts = np.stack([y_pts[sl].ravel(), x_pts[sl].ravel()], axis=-1)
+        lev = interp(pts)  # (n, n_heights)
+
+        zf = np.clip(z.ravel(), heights[0], heights[-1])
+        hi = np.clip(np.searchsorted(heights, zf, side='right'), 1, len(heights) - 1)
+        lo = hi - 1
+        w = (zf - heights[lo]) / (heights[hi] - heights[lo])
+        v_lo = np.take_along_axis(lev, lo[:, None], axis=1)[:, 0]
+        v_hi = np.take_along_axis(lev, hi[:, None], axis=1)[:, 0]
+        res = v_lo * (1 - w) + v_hi * w
+        res[np.isnan(z.ravel())] = np.nan
+        out[sl] = res.reshape(z.shape)
+    return out
+
+
+def interpolate_radar_grid_to_dem(
+    dem: Union[str, Path, xr.DataArray],
+    files: List[Union[str, Path]],
+    band_name: str = None,
+) -> xr.DataArray:
+    """
+    Interpolate radar-grid metadata layers (incidence angle or baselines, as
+    written by ``download_nisar``) onto the grid of a DEM, using each DEM
+    pixel's x, y and elevation.
+
+    Each file holds one band per height above the ellipsoid (taken from the
+    ``height=<m>`` band descriptions). Values are interpolated linearly in
+    x/y and then linearly in height at the DEM elevation. DEM elevations
+    outside the layer's height range are clamped to the nearest level, and
+    pixels outside the radar-grid extent are NaN.
+
+    Parameters
+    ----------
+    dem : str | Path | xarray.DataArray
+        2D elevation raster (metres above the ellipsoid) with a CRS. If its
+        CRS differs from the files', its pixel locations are transformed to
+        the files' CRS for sampling. The output stays on the DEM grid.
+    files : list of str | Path
+        Multi-band GeoTIFFs on the radar grid, one per date pair, all
+        sharing the same grid and heights.
+    band_name : str, optional
+        Name for the returned array. Defaults to ``'radar_grid_layer'``.
+
+    Returns
+    -------
+    xarray.DataArray
+        ``(y, x)`` for a single file, or ``(pair, y, x)`` for several, where
+        ``pair`` is ``'YYYYMMDD_YYYYMMDD'`` (see ``parse_dates``). Shares the
+        DEM's coordinates and CRS.
+    """
+    if not isinstance(dem, xr.DataArray):
+        dem = rioxarray.open_rasterio(dem, masked=True)
+    dem = dem.squeeze(drop=True)
+    if dem.rio.crs is None:
+        raise ValueError("dem must have a CRS")
+    files = [Path(f) for f in files]
+    if not files:
+        raise ValueError("files must not be empty")
+
+    xx, yy = np.meshgrid(dem['x'].values, dem['y'].values)
+    z = dem.values.astype(np.float64)
+    if dem.rio.nodata is not None and not np.isnan(dem.rio.nodata):
+        z = np.where(z == dem.rio.nodata, np.nan, z)
+
+    arrays, pairs = [], []
+    cached_crs = None
+    for f in files:
+        with rioxarray.open_rasterio(f, masked=True) as src:
+            src = src.load()
+        if src.rio.crs != cached_crs:
+            cached_crs = src.rio.crs
+            if cached_crs == dem.rio.crs:
+                x_pts, y_pts = xx, yy
+            else:
+                tf = Transformer.from_crs(dem.rio.crs, cached_crs, always_xy=True)
+                x_pts, y_pts = tf.transform(xx, yy)
+
+        heights = _read_heights(f)
+        order = np.argsort(heights)
+        src = src.isel(band=order).sortby('y')
+        arrays.append(_interp_radar_grid(
+            src.values.astype(np.float64), heights[order], src['y'].values, src['x'].values,
+            x_pts, y_pts, z,
+        ))
+        try:
+            pairs.append('_'.join(parse_dates(f)))
+        except IndexError:
+            pairs.append(f.stem)
+
+    name = band_name or 'radar_grid_layer'
+    if len(arrays) == 1:
+        da = xr.DataArray(arrays[0], dims=('y', 'x'), coords={'y': dem['y'], 'x': dem['x']}, name=name)
+    else:
+        da = xr.DataArray(
+            np.stack(arrays), dims=('pair', 'y', 'x'),
+            coords={'pair': pairs, 'y': dem['y'], 'x': dem['x']}, name=name,
+        )
+    return da.rio.write_crs(dem.rio.crs).rio.write_nodata(np.nan)
