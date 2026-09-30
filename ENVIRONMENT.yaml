@@ -39,7 +39,7 @@ dependencies:
   - scikit-learn
   - tifffile
   - xarray-spatial
-  - skgstat
+  - scikit-gstat
   
   # Testing
   - pytest
