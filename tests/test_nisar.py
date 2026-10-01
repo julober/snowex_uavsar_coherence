@@ -154,3 +154,99 @@ def test_warn_mixed_crids(caplog):
     with caplog.at_level('WARNING'):
         nisar._warn_mixed_crids(RESULTS[:1])
     assert caplog.text == ''
+
+
+# ---------------------------------------------------------------------------
+# GSLC windowed read
+# ---------------------------------------------------------------------------
+
+import geopandas as gpd  # noqa: E402
+from shapely.geometry import box  # noqa: E402
+
+G_NY, G_NX, G_DX = 40, 50, 10.0
+G_X = 500000.0 + G_DX * np.arange(G_NX) + G_DX / 2
+G_Y = 4001000.0 - G_DX * np.arange(G_NY) - G_DX / 2
+
+
+class _SpyDataset:
+    """Wraps an h5py dataset and records the indices it is sliced with."""
+
+    def __init__(self, ds):
+        self._ds, self.keys = ds, []
+        self.shape, self.dtype = ds.shape, ds.dtype
+
+    def __getitem__(self, key):
+        self.keys.append(key)
+        return self._ds[key]
+
+
+def _gslc_file(with_projection=True, pols=('HH',)):
+    f = h5py.File('gslc.h5', 'w', driver='core', backing_store=False)
+    g = f.create_group(nisar.GSLC_BASE_GRIDS)
+    g['xCoordinates'], g['yCoordinates'] = G_X, G_Y
+    g['xCoordinateSpacing'], g['yCoordinateSpacing'] = G_DX, -G_DX
+    if with_projection:
+        g['projection'] = np.uint32(32611)
+    for p in pols:
+        g[p] = (np.arange(G_NY * G_NX).reshape(G_NY, G_NX) * (1 + 1j)).astype(np.complex64)
+    return f
+
+
+def _aoi(xmin, ymin, xmax, ymax):
+    return gpd.GeoDataFrame(geometry=[box(xmin, ymin, xmax, ymax)], crs='EPSG:32611')
+
+
+def test_gslc_window_interior_and_edge():
+    rows, cols = nisar._gslc_window(G_X, G_Y, G_DX, -G_DX, (500100, 4000600, 500200, 4000800))
+    assert (cols.start, cols.stop) == (10, 20)
+    assert (rows.start, rows.stop) == (20, 40)
+    rows, cols = nisar._gslc_window(G_X, G_Y, G_DX, -G_DX, (499000, 4000900, 500050, 4009999))
+    assert cols.start == 0 and rows.start == 0 and cols.stop == 5 and rows.stop == 10
+
+
+def test_gslc_window_no_overlap():
+    with pytest.raises(ValueError, match='does not intersect'):
+        nisar._gslc_window(G_X, G_Y, G_DX, -G_DX, (0, 0, 10, 10))
+
+
+def test_read_gslc_reads_only_window():
+    f = _gslc_file()
+    spy = _SpyDataset(f[f'{nisar.GSLC_BASE_GRIDS}/HH'])
+
+    class _Proxy:  # route the HH dataset through the spy
+        def __contains__(self, k): return k in f
+        def __getitem__(self, k): return spy if k.endswith('/HH') else f[k]
+
+    da = nisar._read_gslc(_Proxy(), 'HH', _aoi(500100, 4000600, 500200, 4000800))
+    assert da.shape == (20, 10) and da.dtype == np.complex64
+    assert len(spy.keys) == 1 and spy.keys[0] == (slice(20, 40), slice(10, 20))
+    assert da.rio.crs.to_epsg() == 32611
+    np.testing.assert_array_equal(da['x'].values, G_X[10:20])
+    f.close()
+
+
+def test_read_gslc_errors():
+    f = _gslc_file()
+    with pytest.raises(KeyError, match='HV'):
+        nisar._read_gslc(f, 'HV', _aoi(500100, 4000600, 500200, 4000800))
+    f.close()
+
+    f = _gslc_file(with_projection=False)
+    aoi = _aoi(500100, 4000600, 500200, 4000800)
+    with pytest.raises(KeyError, match='epsg'):
+        nisar._read_gslc(f, 'HH', aoi)
+    assert nisar._read_gslc(f, 'HH', aoi, epsg=32611).rio.crs.to_epsg() == 32611
+    f.close()
+
+
+def test_gslc_clip_and_complex_geotiff_roundtrip(tmp_path):
+    f = _gslc_file()
+    aoi = _aoi(500100, 4000600, 500200, 4000800)
+    da = nisar._read_gslc(f, 'HH', aoi).rio.write_nodata(0)
+    clipped = da.rio.clip(aoi.to_crs(da.rio.crs).geometry, all_touched=True, drop=True)
+    out = tmp_path / 'x_HH.tif'
+    clipped.rio.to_raster(out, bigtiff='YES')
+    with rasterio.open(out) as src:
+        assert src.dtypes[0] == 'complex64'
+        np.testing.assert_array_equal(src.read(1), clipped.values)
+    f.close()
