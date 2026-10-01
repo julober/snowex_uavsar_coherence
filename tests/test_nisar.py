@@ -320,3 +320,120 @@ def test_nebz_diagonal_aoi_leaves_nan_cells():
     out = _neb_clip(tri)
     assert out.shape == (4, 5)
     assert np.isnan(out.values[0, 0]) and not np.isnan(out.values[3, 0])
+
+
+# ---------------------------------------------------------------------------
+# SNR
+# ---------------------------------------------------------------------------
+
+import warnings  # noqa: E402
+from datetime import datetime  # noqa: E402
+
+
+def _grid(n, size, x0=500000.0, y0=4001000.0, name=None):
+    cell = size / n
+    xs = x0 + cell * (np.arange(n) + 0.5)
+    ys = y0 - cell * (np.arange(n) + 0.5)
+    return xs, ys
+
+
+def _da(values, n, size=1200.0, crs='EPSG:32611', nodata=None):
+    xs, ys = _grid(n, size)
+    da = xr.DataArray(values, dims=('y', 'x'), coords={'y': ys, 'x': xs}).rio.write_crs(crs)
+    return da.rio.write_nodata(nodata) if nodata is not None else da
+
+
+def test_snr_complex_power_and_masking():
+    z = np.full((4, 4), 3 + 4j, dtype=np.complex64)  # |z|^2 = 25
+    z[0, 0] = 0
+    noise = np.full((4, 4), 5.0)
+    noise[1, 1] = 0.0
+    noise[2, 2] = np.nan
+    snr = nisar.calculate_snr(_da(z, 4), _da(noise, 4))
+    assert snr.dims == ('y', 'x') and snr.dtype == np.float32 and snr.name == 'snr'
+    assert snr.values[3, 3] == pytest.approx(5.0)
+    assert np.isnan(snr.values[[0, 1, 2], [0, 1, 2]]).all()
+    db = nisar.calculate_snr(_da(z, 4), _da(noise, 4), db=True)
+    assert db.values[3, 3] == pytest.approx(10 * np.log10(5.0), rel=1e-5)
+
+
+def test_snr_real_and_paths(tmp_path):
+    bs, nz = _da(np.full((4, 4), 10.0), 4), _da(np.full((4, 4), 2.0), 4)
+    bs.rio.to_raster(tmp_path / 'b.tif')
+    nz.rio.to_raster(tmp_path / 'n.tif')
+    snr = nisar.calculate_snr(tmp_path / 'b.tif', str(tmp_path / 'n.tif'))
+    np.testing.assert_allclose(snr.values, 5.0)
+
+
+def test_snr_grid_mismatches_raise():
+    bs = _da(np.ones((4, 4)), 4)
+    with pytest.raises(ValueError, match='shapes differ'):
+        nisar.calculate_snr(bs, _da(np.ones((3, 3)), 3))
+    shifted = _da(np.ones((4, 4)), 4).assign_coords(x=bs.x + 1.0)
+    with pytest.raises(ValueError, match="'x' coordinates differ"):
+        nisar.calculate_snr(bs, shifted)
+    other = _da(np.ones((4, 4)), 4, crs='EPSG:32612')
+    with pytest.raises(ValueError, match='CRS differ'):
+        nisar.calculate_snr(bs, other)
+
+
+SCENE = 'NISAR_L2_PR_GSLC_001_001_A_001_4000_SHNA_A_{t}T124619_{t}T124654_P05023_N_F_J_001'
+
+
+def _write(path, da):
+    da.rio.to_raster(path)
+
+
+def _scene_files(tmp_path, day, pol='HH', bs_val=10.0, nz_val=2.0, nebz=True):
+    scene = SCENE.format(t=day)
+    b = tmp_path / f'{scene}_backscatter_{pol}.tif'
+    _write(b, _da(np.full((12, 12), bs_val), 12))
+    n = tmp_path / f'{scene}_NEBZ_{pol}.tif'
+    if nebz:
+        _write(n, _da(np.full((3, 3), nz_val), 3))
+    return scene, b, (n if nebz else None)
+
+
+def test_parse_acquisition_time():
+    assert nisar.parse_acquisition_time(SCENE.format(t='20260207') + '_backscatter_HH.tif') == datetime(2026, 2, 7, 12, 46, 19)
+    with pytest.raises(ValueError):
+        nisar.parse_acquisition_time('nothing.tif')
+
+
+def test_match_gslc_files(tmp_path):
+    _, b1, n1 = _scene_files(tmp_path, '20260207')
+    _, b2, _ = _scene_files(tmp_path, '20260219', nebz=False)
+    _, _, n3 = _scene_files(tmp_path, '20260303')  # NEBZ file only (backscatter also written but not passed)
+    _, b4, n4 = _scene_files(tmp_path, '20260315', pol='HV')
+    m = nisar._match_gslc_files([b1, b2, b4, tmp_path / 'junk.tif'], [n1, n3, n4], 'HH')
+    assert [x[0] for x in m['matched']] == [SCENE.format(t='20260207')]
+    assert m['unmatched_backscatter'] == [b2]
+    assert m['unmatched_nebz'] == [n3]
+    assert m['unparsed'] == [tmp_path / 'junk.tif']  # HV files silently ignored
+
+
+def test_build_snr_timeseries(tmp_path):
+    s1, b1, n1 = _scene_files(tmp_path, '20260219', bs_val=10.0, nz_val=2.0)
+    s2, b2, n2 = _scene_files(tmp_path, '20260207', bs_val=30.0, nz_val=3.0)
+    _, b3, _ = _scene_files(tmp_path, '20260303', nebz=False)
+    _, _, n4 = _scene_files(tmp_path, '20260315')
+    with pytest.warns(UserWarning) as rec:
+        out = nisar.build_snr_timeseries([b1, b2, b3], [n1, n2, n4])
+    msg = ' '.join(str(w.message) for w in rec)
+    assert b3.name in msg and n4.name in msg
+    assert out.dims == ('date', 'y', 'x') and out.shape == (2, 12, 12)
+    assert list(out['date'].values) == [np.datetime64('2026-02-07T12:46:19'), np.datetime64('2026-02-19T12:46:19')]
+    assert list(out['scene'].values) == [s2, s1]
+    np.testing.assert_allclose(out.values[0], 10.0)  # 30 / 3
+    np.testing.assert_allclose(out.values[1], 5.0)   # 10 / 2
+    assert out.rio.crs.to_epsg() == 32611
+
+
+def test_build_snr_timeseries_errors(tmp_path):
+    _, b1, n1 = _scene_files(tmp_path, '20260207')
+    with pytest.raises(ValueError, match='No matching'), pytest.warns(UserWarning):
+        nisar.build_snr_timeseries([b1], [], 'HH')
+    _, b2, n2 = _scene_files(tmp_path, '20260219')
+    _write(b2, _da(np.ones((6, 6)), 6))  # different backscatter grid
+    with pytest.raises(ValueError, match='same grid'):
+        nisar.build_snr_timeseries([b1, b2], [n1, n2])

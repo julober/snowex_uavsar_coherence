@@ -1,5 +1,7 @@
 import logging
 import re
+import warnings
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
@@ -13,6 +15,7 @@ import rioxarray  # noqa: F401  (registers the .rio accessor on xr.DataArray)
 import shapely
 import xarray as xr
 from pyproj import Transformer
+from rasterio.enums import Resampling
 from scipy.interpolate import RegularGridInterpolator
 
 logger = logging.getLogger(__name__)
@@ -781,3 +784,229 @@ def interpolate_radar_grid_to_dem(
             coords={'pair': pairs, 'y': dem['y'], 'x': dem['x']}, name=name,
         )
     return da.rio.write_crs(dem.rio.crs).rio.write_nodata(np.nan)
+
+
+# =============================================================================
+# SIGNAL-TO-NOISE
+# =============================================================================
+
+_GSLC_FILE_RE = re.compile(r'^(?P<scene>.+)_(?P<layer>backscatter|NEBZ)_(?P<pol>[HV]{2})\.tif$')
+_TIMESTAMP_RE = re.compile(r'(\d{8}T\d{6})')
+
+
+def _open_2d(src: Union[str, Path, xr.DataArray]) -> xr.DataArray:
+    """Open a single-band raster (or pass a DataArray through) as a 2D ``(y, x)`` array.
+
+    Real-valued nodata is converted to NaN; complex rasters are left untouched.
+    """
+    if isinstance(src, xr.DataArray):
+        da = src
+    else:
+        da = rioxarray.open_rasterio(src)
+    if 'band' in da.dims:
+        da = da.squeeze('band', drop=True)
+    nodata = da.rio.nodata
+    if (not np.issubdtype(da.dtype, np.complexfloating) and nodata is not None
+            and not np.isnan(nodata)):
+        da = da.where(da != nodata)
+    return da
+
+
+def calculate_snr(
+    backscatter: Union[str, Path, xr.DataArray],
+    nebz: Union[str, Path, xr.DataArray],
+    db: bool = False,
+) -> xr.DataArray:
+    """
+    Signal-to-noise ratio: backscatter power divided by the noise-equivalent
+    backscatter (NEBZ).
+
+    Both inputs must already be on exactly the same grid (same shape, ``x``/``y``
+    coordinates and CRS); reproject NEBZ onto the backscatter grid first.
+
+    Parameters
+    ----------
+    backscatter : str | Path | xarray.DataArray
+        Backscatter GeoTIFF or array. Complex values (as in GSLC) are converted
+        to power, ``|z|**2``; real values are assumed to already be linear power.
+    nebz : str | Path | xarray.DataArray
+        NEBZ GeoTIFF or array, in the same linear units.
+    db : bool, default=False
+        Return ``10 * log10(snr)`` instead of the linear ratio.
+
+    Returns
+    -------
+    xarray.DataArray
+        float32 ``(y, x)`` array named ``'snr'`` on the backscatter grid. Pixels
+        where backscatter is 0/NaN or NEBZ is NaN or <= 0 are NaN.
+
+    Raises
+    ------
+    ValueError
+        If the two inputs differ in shape, coordinates, or CRS.
+    """
+    bs = _open_2d(backscatter)
+    nz = _open_2d(nebz)
+
+    if bs.dims != nz.dims or bs.shape != nz.shape:
+        raise ValueError(
+            f"backscatter and NEBZ shapes differ: {bs.dims}{bs.shape} vs {nz.dims}{nz.shape}. "
+            "Reproject NEBZ onto the backscatter grid first."
+        )
+    for dim in ('y', 'x'):
+        if not np.array_equal(bs[dim].values, nz[dim].values):
+            raise ValueError(
+                f"backscatter and NEBZ '{dim}' coordinates differ. "
+                "Reproject NEBZ onto the backscatter grid first."
+            )
+    if bs.rio.crs != nz.rio.crs:
+        raise ValueError(f"backscatter and NEBZ CRS differ: {bs.rio.crs} vs {nz.rio.crs}.")
+
+    power = np.abs(bs) ** 2 if np.issubdtype(bs.dtype, np.complexfloating) else bs
+    power = power.where(power != 0)
+    noise = nz.where(nz > 0)
+
+    snr = (power.astype(np.float64) / noise.astype(np.float64))
+    if db:
+        snr = 10 * np.log10(snr)
+    snr = snr.astype(np.float32)
+    snr.name = 'snr'
+    snr.attrs = {'units': 'dB' if db else 'linear'}
+    return snr.rio.write_crs(bs.rio.crs) if bs.rio.crs is not None else snr
+
+
+def parse_acquisition_time(fname: Union[str, Path]) -> datetime:
+    """
+    Acquisition start time from a NISAR scene name or a filename that begins
+    with one (the first ``YYYYMMDDTHHMMSS`` token; GSLC names carry start and
+    stop times).
+    """
+    m = _TIMESTAMP_RE.search(Path(str(fname)).name)
+    if m is None:
+        raise ValueError(f"No YYYYMMDDTHHMMSS timestamp found in '{fname}'.")
+    return datetime.strptime(m.group(1), '%Y%m%dT%H%M%S')
+
+
+def _match_gslc_files(
+    backscatter_files: List[Union[str, Path]],
+    nebz_files: List[Union[str, Path]],
+    polarization: str = 'HH',
+) -> dict:
+    """
+    Pair ``*_backscatter_{pol}.tif`` with ``*_NEBZ_{pol}.tif`` files by scene
+    name (which embeds track, frame, times and processing code) and polarization.
+
+    Only files of ``polarization`` are considered. Returns a dict with
+    ``matched`` (list of ``(scene, backscatter_path, nebz_path)``),
+    ``unmatched_backscatter``, ``unmatched_nebz`` and ``unparsed`` (names that
+    don't follow the expected pattern or are in the wrong list).
+    """
+    def index(files, expected_layer):
+        found, unparsed = {}, []
+        for f in files:
+            m = _GSLC_FILE_RE.match(Path(f).name)
+            if m is None or m['layer'] != expected_layer:
+                unparsed.append(Path(f))
+            elif m['pol'] == polarization:
+                found[m['scene']] = Path(f)
+        return found, unparsed
+
+    bs, bad_bs = index(backscatter_files, 'backscatter')
+    nz, bad_nz = index(nebz_files, 'NEBZ')
+
+    return {
+        'matched': [(scene, bs[scene], nz[scene]) for scene in sorted(bs) if scene in nz],
+        'unmatched_backscatter': [bs[k] for k in sorted(bs) if k not in nz],
+        'unmatched_nebz': [nz[k] for k in sorted(nz) if k not in bs],
+        'unparsed': bad_bs + bad_nz,
+    }
+
+
+def build_snr_timeseries(
+    backscatter_files: List[Union[str, Path]],
+    nebz_files: List[Union[str, Path]],
+    polarization: str = 'HH',
+    resampling: str = 'bilinear',
+    db: bool = False,
+) -> xr.DataArray:
+    """
+    Compute SNR for every matching backscatter/NEBZ file pair and stack the
+    results along an overpass-time dimension.
+
+    Files are paired by scene name and polarization (see ``_match_gslc_files``).
+    Each NEBZ raster is reprojected onto its backscatter grid with
+    ``reproject_match`` and passed to ``calculate_snr``.
+
+    Parameters
+    ----------
+    backscatter_files, nebz_files : list of str | Path
+        Files written by ``download_nisar_gslc``
+        (``{scene}_backscatter_{pol}.tif`` / ``{scene}_NEBZ_{pol}.tif``).
+    polarization : str, default='HH'
+        Only files of this polarization are used.
+    resampling : str, default='bilinear'
+        ``rasterio.enums.Resampling`` name used to reproject NEBZ
+        (``'nearest'``, ``'bilinear'``, ``'cubic'``, ...).
+    db : bool, default=False
+        Return SNR in dB.
+
+    Returns
+    -------
+    xarray.DataArray
+        ``(date, y, x)`` array named ``'snr'``. ``date`` holds the acquisition
+        start time (xarray stores Python datetimes as ``datetime64``), sorted
+        ascending, with a ``scene`` coordinate alongside.
+
+    Warns
+    -----
+    UserWarning
+        Listing every backscatter/NEBZ file without a partner (and unparseable
+        names), and any duplicate acquisition times.
+
+    Raises
+    ------
+    ValueError
+        If nothing matches, or the matched backscatter files are not all on
+        the same grid.
+    """
+    m = _match_gslc_files(backscatter_files, nebz_files, polarization)
+
+    problems = []
+    if m['unmatched_backscatter']:
+        problems.append("backscatter without NEBZ: " + ", ".join(p.name for p in m['unmatched_backscatter']))
+    if m['unmatched_nebz']:
+        problems.append("NEBZ without backscatter: " + ", ".join(p.name for p in m['unmatched_nebz']))
+    if m['unparsed']:
+        problems.append("unrecognized/misplaced filenames: " + ", ".join(p.name for p in m['unparsed']))
+    if problems:
+        msg = "Unmatched files (" + polarization + "): " + "; ".join(problems)
+        logger.warning(msg)
+        warnings.warn(msg, UserWarning, stacklevel=2)
+
+    if not m['matched']:
+        raise ValueError(f"No matching backscatter/NEBZ file pairs found for polarization '{polarization}'.")
+
+    items = sorted(((parse_acquisition_time(scene), scene, bs, nz) for scene, bs, nz in m['matched']),
+                   key=lambda t: (t[0], t[1]))
+    times = [t[0] for t in items]
+    if len(set(times)) != len(times):
+        dup = sorted({str(t) for t in times if times.count(t) > 1})
+        warnings.warn(f"Duplicate acquisition times: {dup}", UserWarning, stacklevel=2)
+
+    layers, ref = [], None
+    for when, scene, bs_path, nz_path in items:
+        bs = _open_2d(bs_path)
+        if ref is None:
+            ref = bs
+        elif (bs.shape != ref.shape or bs.rio.crs != ref.rio.crs
+              or not np.array_equal(bs['x'].values, ref['x'].values)
+              or not np.array_equal(bs['y'].values, ref['y'].values)):
+            raise ValueError(f"{bs_path.name} is not on the same grid as the other backscatter files.")
+        nz = _open_2d(nz_path).rio.reproject_match(bs, resampling=Resampling[resampling])
+        layers.append(calculate_snr(bs, nz, db=db).drop_vars('spatial_ref', errors='ignore'))
+
+    out = xr.concat(layers, dim=xr.DataArray(np.array(times, dtype='datetime64[ns]'), dims='date', name='date'))
+    out = out.assign_coords(scene=('date', [t[1] for t in items]))
+    out.name = 'snr'
+    out.attrs = {'units': 'dB' if db else 'linear'}
+    return out.rio.write_crs(ref.rio.crs)
