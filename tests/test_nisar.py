@@ -217,7 +217,7 @@ def test_read_gslc_reads_only_window():
         def __contains__(self, k): return k in f
         def __getitem__(self, k): return spy if k.endswith('/HH') else f[k]
 
-    da = nisar._read_gslc(_Proxy(), 'HH', _aoi(500100, 4000600, 500200, 4000800))
+    da = nisar._read_gslc(_Proxy(), 'backscatter', 'HH', _aoi(500100, 4000600, 500200, 4000800))
     assert da.shape == (20, 10) and da.dtype == np.complex64
     assert len(spy.keys) == 1 and spy.keys[0] == (slice(20, 40), slice(10, 20))
     assert da.rio.crs.to_epsg() == 32611
@@ -228,21 +228,21 @@ def test_read_gslc_reads_only_window():
 def test_read_gslc_errors():
     f = _gslc_file()
     with pytest.raises(KeyError, match='HV'):
-        nisar._read_gslc(f, 'HV', _aoi(500100, 4000600, 500200, 4000800))
+        nisar._read_gslc(f, 'backscatter', 'HV', _aoi(500100, 4000600, 500200, 4000800))
     f.close()
 
     f = _gslc_file(with_projection=False)
     aoi = _aoi(500100, 4000600, 500200, 4000800)
     with pytest.raises(KeyError, match='epsg'):
-        nisar._read_gslc(f, 'HH', aoi)
-    assert nisar._read_gslc(f, 'HH', aoi, epsg=32611).rio.crs.to_epsg() == 32611
+        nisar._read_gslc(f, 'backscatter', 'HH', aoi)
+    assert nisar._read_gslc(f, 'backscatter', 'HH', aoi, epsg=32611).rio.crs.to_epsg() == 32611
     f.close()
 
 
 def test_gslc_clip_and_complex_geotiff_roundtrip(tmp_path):
     f = _gslc_file()
     aoi = _aoi(500100, 4000600, 500200, 4000800)
-    da = nisar._read_gslc(f, 'HH', aoi).rio.write_nodata(0)
+    da = nisar._read_gslc(f, 'backscatter', 'HH', aoi).rio.write_nodata(0)
     clipped = da.rio.clip(aoi.to_crs(da.rio.crs).geometry, all_touched=True, drop=True)
     out = tmp_path / 'x_HH.tif'
     clipped.rio.to_raster(out, bigtiff='YES')
@@ -250,3 +250,73 @@ def test_gslc_clip_and_complex_geotiff_roundtrip(tmp_path):
         assert src.dtypes[0] == 'complex64'
         np.testing.assert_array_equal(src.read(1), clipped.values)
     f.close()
+
+
+# ---------------------------------------------------------------------------
+# NEBZ layer (own coarse grid, clipped by cell overlap)
+# ---------------------------------------------------------------------------
+
+N_NX, N_NY, N_DX = 5, 4, 100.0  # 100 m cells, centres at 500050, 500150, ...
+N_X = 500000.0 + N_DX * np.arange(N_NX) + N_DX / 2
+N_Y = 4001000.0 - 1000.0 + 400.0 - N_DX * np.arange(N_NY) - N_DX / 2  # 4000350 .. 4000050
+_NEB = nisar.GSLC_LAYER_REGISTRY['NEBZ']['group']
+
+
+def _neb_file(spacing=False):
+    f = _gslc_file()
+    g = f.create_group(_NEB)
+    g['xCoordinates'], g['yCoordinates'] = N_X, N_Y
+    g['projection'] = np.uint32(32611)
+    if spacing:
+        g['xCoordinateSpacing'], g['yCoordinateSpacing'] = N_DX, -N_DX
+    data = (1.0 + np.arange(N_NY * N_NX).reshape(N_NY, N_NX)).astype(np.float64)
+    data[0, 0] = 0  # invalid
+    g['HH'] = data
+    return f
+
+
+def test_nebz_read_own_grid_dtype_and_spacing_fallback():
+    f = _neb_file()
+    da = nisar._read_gslc(f, 'NEBZ', 'HH', _aoi(500000, 4000000, 500500, 4000400))
+    assert da.shape == (N_NY, N_NX) and da.dtype == np.float64
+    assert da.rio.crs.to_epsg() == 32611
+    assert da.attrs['x_spacing'] == N_DX and da.attrs['y_spacing'] == -N_DX
+    assert np.isnan(da.values[0, 0])
+    f.close()
+
+
+def test_unknown_layer_raises():
+    f = _neb_file()
+    with pytest.raises(ValueError, match=r"\['NEBZ', 'backscatter'\]"):
+        nisar._read_gslc(f, 'nope', 'HH', _aoi(500000, 4000000, 500500, 4000400))
+    f.close()
+
+
+def _neb_clip(aoi):
+    f = _neb_file(spacing=True)
+    da = nisar._read_gslc(f, 'NEBZ', 'HH', aoi)
+    out = nisar._clip_gslc(da, 'NEBZ', aoi)
+    f.close()
+    return out
+
+
+def test_nebz_keeps_cell_with_only_corner_overlap():
+    # covers only the lower-left corner of the cell centred at (500250, 4000150); no centre inside
+    out = _neb_clip(_aoi(500205, 4000105, 500215, 4000115))
+    assert out.shape == (1, 1)
+    assert out['x'].values[0] == 500250 and out['y'].values[0] == 4000150
+
+
+def test_nebz_keeps_only_overlapping_cells_and_excludes_edge_touch():
+    # rectangle over cells in columns 1-2 / rows 1-2; its edges lie exactly on cell boundaries
+    out = _neb_clip(_aoi(500100, 4000100, 500300, 4000300))
+    assert out.shape == (2, 2)
+    assert not np.isnan(out.values).any()
+
+
+def test_nebz_diagonal_aoi_leaves_nan_cells():
+    from shapely.geometry import Polygon
+    tri = gpd.GeoDataFrame(geometry=[Polygon([(500010, 4000010), (500490, 4000010), (500490, 4000390)])], crs='EPSG:32611')
+    out = _neb_clip(tri)
+    assert out.shape == (4, 5)
+    assert np.isnan(out.values[0, 0]) and not np.isnan(out.values[3, 0])

@@ -10,6 +10,7 @@ import h5py
 import numpy as np
 import rasterio
 import rioxarray  # noqa: F401  (registers the .rio accessor on xr.DataArray)
+import shapely
 import xarray as xr
 from pyproj import Transformer
 from scipy.interpolate import RegularGridInterpolator
@@ -334,6 +335,24 @@ def _load_boundary(aoi: Union[str, Path, gpd.GeoDataFrame]) -> gpd.GeoDataFrame:
 GSLC_BASE_GRIDS: str = 'science/LSAR/GSLC/grids/frequencyA'
 """Root group for the NISAR GSLC backscatter grids."""
 
+GSLC_LAYER_REGISTRY: dict = {
+    'backscatter': {
+        'group': GSLC_BASE_GRIDS,
+        'complex': True,
+        'clip': 'pixels',
+    },
+    'NEBZ': {
+        'group': 'science/LSAR/GSLC/metadata/calibrationInformation/frequencyA/noiseEquivalentBackscatter',
+        'complex': False,
+        'clip': 'cells',
+    },
+}
+"""Maps a GSLC layer name to the HDF5 group holding its per-polarization dataset
+(named by the polarization, e.g. ``.../HH``) together with that layer's own
+``xCoordinates``/``yCoordinates``/``projection``. ``clip='pixels'`` clips to the
+AOI polygon at pixel level (full-resolution backscatter); ``clip='cells'`` keeps
+every coarse grid cell overlapping the AOI (noise-equivalent backscatter)."""
+
 
 def _gslc_window(
     x: np.ndarray, y: np.ndarray, x_spacing: float, y_spacing: float,
@@ -354,41 +373,94 @@ def _gslc_window(
     return slice(int(rows[0]), int(rows[-1]) + 1), slice(int(cols[0]), int(cols[-1]) + 1)
 
 
+def _grid_spacing(hf: h5py.File, group: str, name: str, coords: np.ndarray) -> float:
+    """Coordinate spacing from ``{name}CoordinateSpacing`` if present, else from the coordinates."""
+    path = f'{group}/{name}CoordinateSpacing'
+    if path in hf:
+        return float(hf[path][()])
+    if len(coords) < 2:
+        raise ValueError(f"Cannot determine {name} spacing from a single coordinate in {group}.")
+    return float(coords[1] - coords[0])
+
+
 def _read_gslc(
-    hf: h5py.File, polarization: str, boundary: gpd.GeoDataFrame, epsg: Optional[int] = None,
+    hf: h5py.File, layer: str, polarization: str, boundary: gpd.GeoDataFrame,
+    epsg: Optional[int] = None,
 ) -> xr.DataArray:
-    """Read the GSLC backscatter for ``polarization``, only over the AOI's pixel window.
+    """Read a GSLC layer for ``polarization``, only over the AOI's pixel window.
 
-    The full raster is tens of GB, so only the h5py slice covering the AOI
-    bounding box is read; the caller clips it to the exact AOI geometry.
+    The backscatter raster is tens of GB, so only the h5py slice covering the
+    AOI bounding box is read; the caller clips it to the exact AOI geometry.
+    Coordinates and projection come from the layer's own group.
     """
-    ds_path = f'{GSLC_BASE_GRIDS}/{polarization}'
-    if ds_path not in hf:
-        available = [k for k, v in hf[GSLC_BASE_GRIDS].items() if isinstance(v, h5py.Dataset) and v.ndim == 2]
-        raise KeyError(f"Polarization '{polarization}' not found in GSLC granule; available: {available}")
+    if layer not in GSLC_LAYER_REGISTRY:
+        raise ValueError(
+            f"Unknown GSLC layer '{layer}'. Valid options are: {sorted(GSLC_LAYER_REGISTRY)}"
+        )
+    entry = GSLC_LAYER_REGISTRY[layer]
+    group = entry['group']
 
-    proj_path = f'{GSLC_BASE_GRIDS}/projection'
+    ds_path = f'{group}/{polarization}'
+    if ds_path not in hf:
+        available = [k for k, v in hf[group].items() if isinstance(v, h5py.Dataset) and v.ndim == 2]
+        raise KeyError(f"Polarization '{polarization}' not found for layer '{layer}'; available: {available}")
+
+    proj_path = f'{group}/projection'
     if proj_path in hf:
         epsg = int(hf[proj_path][()])
     elif epsg is None:
-        raise KeyError(
-            f"No 'projection' dataset at {GSLC_BASE_GRIDS}; pass epsg=... to specify the granule's CRS."
-        )
+        raise KeyError(f"No 'projection' dataset at {group}; pass epsg=... to specify the granule's CRS.")
 
-    x = hf[f'{GSLC_BASE_GRIDS}/xCoordinates'][:]
-    y = hf[f'{GSLC_BASE_GRIDS}/yCoordinates'][:]
-    x_spacing = float(hf[f'{GSLC_BASE_GRIDS}/xCoordinateSpacing'][()])
-    y_spacing = float(hf[f'{GSLC_BASE_GRIDS}/yCoordinateSpacing'][()])
+    x = hf[f'{group}/xCoordinates'][:]
+    y = hf[f'{group}/yCoordinates'][:]
+    x_spacing = _grid_spacing(hf, group, 'x', x)
+    y_spacing = _grid_spacing(hf, group, 'y', y)
 
     bounds = tuple(boundary.to_crs(f'EPSG:{epsg}').total_bounds)
     rows, cols = _gslc_window(x, y, x_spacing, y_spacing, bounds)
     ds = hf[ds_path]
-    logger.info(f"  reading {polarization} window {rows.stop - rows.start}x{cols.stop - cols.start} "
+    logger.info(f"  reading {layer} {polarization} window {rows.stop - rows.start}x{cols.stop - cols.start} "
                 f"of {ds.shape[0]}x{ds.shape[1]}")
     data = ds[rows, cols]
 
-    da = xr.DataArray(data, dims=['y', 'x'], coords={'x': x[cols], 'y': y[rows]}, name=polarization)
-    return da.rio.write_crs(f'EPSG:{epsg}')
+    if not entry['complex']:
+        fill_value = ds.attrs.get('_FillValue', None)
+        if fill_value is not None:
+            data = np.where(data == fill_value, np.nan, data)
+        data = np.where(data == 0, np.nan, data)
+
+    da = xr.DataArray(data, dims=['y', 'x'], coords={'x': x[cols], 'y': y[rows]}, name=layer)
+    da = da.rio.write_crs(f'EPSG:{epsg}')
+    da.attrs['x_spacing'], da.attrs['y_spacing'] = x_spacing, y_spacing
+    return da
+
+
+def _cell_overlap_mask(da: xr.DataArray, geometry, x_spacing: float, y_spacing: float) -> xr.DataArray:
+    """Boolean ``(y, x)`` mask of grid cells whose footprint overlaps ``geometry``.
+
+    Cell footprints are the pixel-centre coordinates +/- half the spacing, so a
+    cell counts even if its centre lies outside the geometry. Cells that only
+    share an edge or corner with the geometry do not count.
+    """
+    hx, hy = abs(x_spacing) / 2, abs(y_spacing) / 2
+    xx, yy = np.meshgrid(da['x'].values, da['y'].values)
+    cells = shapely.box(xx - hx, yy - hy, xx + hx, yy + hy)
+    aoi = shapely.union_all(list(geometry))
+    mask = shapely.intersects(cells, aoi) & ~shapely.touches(cells, aoi)
+    return xr.DataArray(mask, dims=('y', 'x'), coords={'y': da['y'], 'x': da['x']})
+
+
+def _clip_gslc(da: xr.DataArray, layer: str, boundary: gpd.GeoDataFrame) -> xr.DataArray:
+    """Clip a windowed GSLC layer to the AOI according to the layer's ``clip`` mode."""
+    geom = boundary.to_crs(da.rio.crs).geometry
+    if GSLC_LAYER_REGISTRY[layer]['clip'] == 'cells':
+        mask = _cell_overlap_mask(da, geom, da.attrs['x_spacing'], da.attrs['y_spacing'])
+        rows, cols = np.flatnonzero(mask.any('x').values), np.flatnonzero(mask.any('y').values)
+        if rows.size == 0 or cols.size == 0:
+            raise ValueError("No grid cells overlap the AOI.")
+        clipped = da.where(mask).isel(y=slice(rows[0], rows[-1] + 1), x=slice(cols[0], cols[-1] + 1))
+        return clipped.rio.write_nodata(np.nan)
+    return da.rio.write_nodata(0).rio.clip(geom, all_touched=True, drop=True)
 
 
 def download_nisar_gslc(
@@ -397,6 +469,7 @@ def download_nisar_gslc(
     start_date: str,
     end_date: str,
     aoi: Union[str, Path, gpd.GeoDataFrame],
+    layers: List[str] = ('backscatter',),
     output_dir: Union[str, Path] = '.',
     polarization: Union[str, List[str]] = 'HH',
     crid: Optional[str] = None,
@@ -404,11 +477,10 @@ def download_nisar_gslc(
 ) -> Tuple[List[str], List[Path]]:
     """
     Search for NISAR GSLC granules over a track/frame and date range, clip the
-    complex backscatter to an AOI, and write it as complex64 GeoTIFFs.
+    requested layers to an AOI, and write them as GeoTIFFs.
 
     Granules are streamed over HTTPS and only the pixel window covering the
-    AOI is read (the full GSLC raster is ~39 GB), then clipped to the exact AOI
-    geometry.
+    AOI is read (the full GSLC backscatter raster is ~39 GB), then clipped.
 
     Parameters
     ----------
@@ -418,6 +490,12 @@ def download_nisar_gslc(
         Search window (e.g. ``'2026-02-01'``).
     aoi : str | Path | geopandas.GeoDataFrame
         Area of interest: a vector file path or a loaded GeoDataFrame.
+    layers : list of str, default=['backscatter']
+        Valid options are the keys of ``GSLC_LAYER_REGISTRY``:
+        ``'backscatter'`` (complex64 ``grids/frequencyA/{pol}``, clipped to the
+        AOI polygon at pixel level) and ``'NEBZ'`` (noise-equivalent
+        backscatter on its coarse calibration grid, keeping every grid cell
+        that overlaps the AOI at all, not only cells whose centre is inside).
     output_dir : str | Path
         Directory for the GeoTIFFs. Created if it doesn't exist.
     polarization : str | list of str, default='HH'
@@ -425,22 +503,29 @@ def download_nisar_gslc(
     crid : str, optional
         Processing code to keep, e.g. ``'P05023'`` (filtered client-side).
     epsg : int, optional
-        CRS to assume if the granule has no ``projection`` dataset under
-        ``science/LSAR/GSLC/grids/frequencyA``.
+        CRS to assume for a layer's group if it has no ``projection`` dataset.
 
     Returns
     -------
     granule_names : list of str
         Scene names of every granule found.
     downloaded_files : list of Path
-        ``{scene}_{pol}.tif`` paths, new or already present (existing files
-        are skipped). Pixels outside the AOI polygon are 0 (complex NaN is not
-        a reliable GeoTIFF nodata); invalid pixels inside it keep their
-        original values.
+        ``{scene}_{layer}_{pol}.tif`` paths, new or already present (existing
+        files are skipped). Backscatter pixels outside the AOI polygon are 0
+        (complex NaN is not a reliable GeoTIFF nodata); NEBZ cells outside the
+        overlap and invalid values are NaN.
     """
+    layers = [layers] if isinstance(layers, str) else list(layers)
+    unknown = [lyr for lyr in layers if lyr not in GSLC_LAYER_REGISTRY]
+    if unknown:
+        raise ValueError(
+            f"Unknown GSLC layer(s) {unknown}. Valid options are: {sorted(GSLC_LAYER_REGISTRY)}"
+        )
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     pols = [polarization] if isinstance(polarization, str) else list(polarization)
+    combos = [(layer, pol) for layer in layers for pol in pols]
 
     earthaccess.login()
 
@@ -461,14 +546,14 @@ def download_nisar_gslc(
 
     for granule in results:
         scene_name = granule.properties['sceneName']
-        out_paths = {pol: output_dir / f'{scene_name}_{pol}.tif' for pol in pols}
+        out_paths = {c: output_dir / f'{scene_name}_{c[0]}_{c[1]}.tif' for c in combos}
 
         for out_path in out_paths.values():
             if out_path.exists():
                 logger.info(f"  {out_path.name} already exists, skipping")
                 downloaded_files.append(out_path)
 
-        missing = [pol for pol in pols if not out_paths[pol].exists()]
+        missing = [c for c in combos if not out_paths[c].exists()]
         if not missing:
             continue
 
@@ -476,13 +561,11 @@ def download_nisar_gslc(
         url = granule.properties['url']
 
         with h5py.File(fs.open(url, cache_type='background', block_size=16 * 1024 * 1024), 'r') as hf:
-            for pol in missing:
-                da = _read_gslc(hf, pol, boundary, epsg)
-                da = da.rio.write_nodata(0)
-                clip_geom = boundary.to_crs(da.rio.crs).geometry
-                clipped = da.rio.clip(clip_geom, all_touched=True, drop=True)
+            for layer, pol in missing:
+                da = _read_gslc(hf, layer, pol, boundary, epsg)
+                clipped = _clip_gslc(da, layer, boundary)
 
-                out_path = out_paths[pol]
+                out_path = out_paths[(layer, pol)]
                 clipped.rio.to_raster(out_path, bigtiff='YES')
                 downloaded_files.append(out_path)
                 logger.info(f"  wrote {out_path.name} ({clipped.shape[-1]}x{clipped.shape[-2]})")
