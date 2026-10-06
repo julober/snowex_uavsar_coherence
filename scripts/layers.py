@@ -91,7 +91,7 @@ def assemble_data(
     tile_aoi: Polygon,
     date_pairs: List[Tuple[date, date]],
     flight_ids: List[str],
-    include_layers: Optional[List[str]] = None, # <-- New parameter
+    include_layers: Optional[List[str]] = None, 
     fp_coh: str = '../data/coherence/',
     coh_pol = None,
     fp_inc: str = '../data/inc_angle/',
